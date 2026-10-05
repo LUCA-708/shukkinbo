@@ -41,6 +41,8 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 #hdrTitle,.edtitle{flex:1;font-size:21px;font-weight:bold}
 .edhdr{display:flex;align-items:center;gap:6px;padding:12px 14px 8px;border-bottom:1px solid var(--line)}
 .hbtn{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 12px;font-size:15px;min-height:40px}
+/* 今月ボタン＝📱タスクの「今日」ボタンと同じ形（今月を見ているときは出さない） */
+#goMonth{padding:8px 18px;font-size:17px;font-weight:bold;min-height:44px;border-color:var(--acc);color:var(--acc);white-space:nowrap}
 
 /* C 押し忘れの知らせ */
 .warn{display:block;width:calc(100% - 28px);margin:10px 14px 0;background:var(--warn-soft);border:1px solid #E9C48F;color:#7A4A0E;
@@ -62,6 +64,24 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 .subbtns button.on{background:var(--brk);color:#fff}
 .subbtns button:disabled{opacity:.3;cursor:default}
 .done{margin:12px 20px;padding:14px;border-radius:14px;background:var(--acc-soft);color:var(--acc);text-align:center;font-weight:bold}
+/* 退勤した後（見本 v5）：時計は小さく・今日の作業時間を大きく */
+.now.small{padding:10px 10px 0}
+.now.small .clock{font-size:30px}
+.fin{margin:12px 16px 10px;background:var(--acc-soft);border:1px solid #C5DDCD;border-radius:16px;padding:16px;text-align:center}
+.fin .t1{font-size:19px;font-weight:bold;color:var(--acc)}
+.fin .t2{font-size:14px;color:var(--ink2);margin-top:10px}
+.fin .t3{font-size:48px;font-weight:bold;line-height:1.1;font-variant-numeric:tabular-nums}
+.fin .t4{font-size:16px;margin-top:6px}
+.fin .t5{font-size:16px;font-weight:bold;color:var(--warn);margin-top:4px}
+/* R 今日押した記録・S 今月ここまで */
+.mini{margin:0 16px 12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;font-size:16px;line-height:1.9}
+.mini h4{margin:0 0 2px;font-size:14px;color:var(--ink2)}
+.log div{display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);font-variant-numeric:tabular-nums}
+.loglink{display:block;width:100%;text-align:left;color:var(--acc);font-size:14px;padding:6px 0 2px;min-height:36px}
+.mini .g{display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;font-size:13px;color:var(--ink2);line-height:1.5}
+.mini .g b{display:block;font-size:19px;color:var(--ink);font-variant-numeric:tabular-nums}
+.mini .g b.ov{color:var(--warn)}
+.btn.edtoday{width:calc(100% - 32px);margin:0 16px 16px}
 .undo{display:flex;justify-content:space-between;align-items:center;margin:8px 20px;background:#2C2C2A;color:#fff;border-radius:12px;padding:6px 6px 6px 14px;font-size:14px}
 .undo button{color:#fff;font-weight:bold;padding:8px 12px;min-height:40px}
 
@@ -146,7 +166,7 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 </style>
 </head>
 <body>
-<div id="hdr"><div id="hdrTitle">出勤簿</div></div>
+<div id="hdr"><div id="hdrTitle">出勤簿</div><button class="hbtn hide" id="goMonth">今月</button></div>
 <main id="view"></main>
 <div id="editor" class="hide"><div class="inner" id="editorIn"></div></div>
 <nav id="tabs"><div class="in">
@@ -384,6 +404,18 @@ function sinceOf(days, since, today) {
   var s = since || today;
   return first && first < s ? first : s;
 }
+// 今日押した記録を押した順に（出勤→休憩入り/おわり…→退勤）
+function punchLog(day) {
+  var out = [];
+  if (!day || day.kind !== "work" || !day.start) return out;
+  out.push({ label: "出勤", time: day.start });
+  (day.breaks || []).forEach(function (b) {
+    out.push({ label: "☕ 休憩入り", time: b.s });
+    if (b.e) out.push({ label: "休憩おわり", time: b.e });
+  });
+  if (day.end) out.push({ label: "退勤", time: day.end });
+  return out;
+}
 // ===LOGIC-END===
 
 // ───────────────────────── ここから画面 ─────────────────────────
@@ -448,12 +480,18 @@ function renderToday() {
   var h = "";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
   h += alertBox();
-  h += '<div class="now"><div class="date">' + now.getFullYear() + "年" + (now.getMonth() + 1) + "月" + now.getDate() + "日（" + WD[now.getDay()] + '）</div><div class="clock" id="clock">' + hmOf(now) + "</div></div>";
+  // 退勤した後は時計を小さく＝今日の作業時間（大きい数字）を主役にする（見本 v5）
+  h += '<div class="now' + (st === "done" ? " small" : "") + '"><div class="date">' + now.getFullYear() + "年" + (now.getMonth() + 1) + "月" + now.getDate() + "日（" + WD[now.getDay()] + '）</div><div class="clock" id="clock">' + hmOf(now) + "</div></div>";
   if (st === "off") {
     h += '<div class="done">今日は「休み」にしてあります</div>';
     h += '<button class="btn sec2" style="width:calc(100% - 40px);margin:8px 20px" data-edit="' + t + '">直す</button>';
   } else if (st === "done") {
-    h += '<div class="done">おつかれさまでした（退勤 ' + esc(day.end) + "）</div>";
+    h += finishedHtml(t, day);
+    if (V.undo && V.undo.until > Date.now()) h += '<div class="undo"><span>' + esc(V.undo.label) + '</span><button data-undo="1">↩ 取り消す</button></div>';
+    h += punchLogHtml(t, day, false) + monthMiniHtml(t);
+    h += '<button class="btn sec2 edtoday" data-edit="' + t + '">✏ 今日を直す</button>';
+    el("view").innerHTML = h;
+    return;
   } else {
     h += '<button class="big" data-act="in"' + (acts.indexOf("in") < 0 ? " disabled" : "") + ">" + (day && day.start ? "出勤済み " + esc(day.start) : "出勤する") + "</button>";
     h += '<div class="subbtns"><button data-act="brkIn"' + (acts.indexOf("brkIn") < 0 ? " disabled" : "") + ">☕ 休憩入り</button>"
@@ -464,7 +502,29 @@ function renderToday() {
     h += '<div class="undo"><span>' + esc(V.undo.label) + '</span><button data-undo="1">↩ 取り消す</button></div>';
   }
   h += '<div id="todayStatus">' + statusBox() + "</div>";
+  if (day && day.start) h += punchLogHtml(t, day, true);
   el("view").innerHTML = h;
+}
+// U 退勤した後の今日の結果（作業時間を大きく）
+function finishedHtml(t, day) {
+  var w = dayWork(day, S.prefs);
+  var h = '<div class="fin"><div class="t1">おつかれさまでした</div><div class="t2">今日の作業時間</div><div class="t3">' + dur(w.work) + "</div>"
+    + '<div class="t4">' + esc(day.start) + " – " + esc(day.end) + " ／ 休憩 " + dur(w.brk) + (w.brkKind === "auto" ? "（いつもの・自動）" : "") + "</div>";
+  if (w.over > 0) h += '<div class="t5">目安の ' + dur(S.prefs.limit) + " を " + dur(w.over) + " 超えました</div>";
+  return h + "</div>";
+}
+// R 今日押した記録（withLink＝下に「今日を直す」への一言を付ける＝退勤前。退勤後は専用のボタンがあるので付けない）
+function punchLogHtml(t, day, withLink) {
+  var h = '<div class="mini log"><h4>今日押した記録</h4>';
+  punchLog(day).forEach(function (p) { h += "<div><span>" + esc(p.label) + "</span><span>" + esc(p.time) + "</span></div>"; });
+  if (withLink) h += '<button class="loglink" data-edit="' + t + '">押し間違えたら → 今日を直す</button>';
+  return h + "</div>";
+}
+// S 今月ここまで
+function monthMiniHtml(t) {
+  var ym = monthOf(t), s = monthSummary(S.days, ym, S.prefs);
+  return '<div class="mini"><h4>今月（' + (+ym.split("-")[1]) + "月）ここまで</h4>"
+    + '<div class="g"><div>作業した日<b>' + s.days + "日</b></div><div>作業時間<b>" + dur(s.total) + "</b></div><div>" + dur(S.prefs.limit) + "超<b" + (s.over > 0 ? ' class="ov"' : "") + ">" + dur(s.over) + "</b></div></div></div>";
 }
 function statusBox() {
   var t = today(), day = S.days[t], st = stateOf(day);
@@ -530,6 +590,7 @@ function doUndo() {
 function renderMonth() {
   var t = today(), ym = V.month || monthOf(t);
   var p = ym.split("-");
+  el("goMonth").classList.toggle("hide", ym === monthOf(t));   // 今月を見ているときは出さない（📱タスクと同じ）
   var sum = monthSummary(S.days, ym, S.prefs), prev = monthSummary(S.days, addMonths(ym, -1), S.prefs);
   var h = "";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
@@ -736,6 +797,7 @@ function doImport() {
 function render() {
   document.querySelectorAll("#tabs button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-tab") === V.tab); });
   el("hdrTitle").textContent = V.tab === "today" ? "出勤簿" : V.tab === "month" ? "月の一覧" : "設定";
+  if (V.tab !== "month") el("goMonth").classList.add("hide");
   if (V.tab === "today") renderToday();
   else if (V.tab === "month") renderMonth();
   else renderSettings();
@@ -774,6 +836,7 @@ function start() {
     render(); window.scrollTo(0, 0);
   });
   el("view").addEventListener("click", onViewClick);
+  el("goMonth").addEventListener("click", function () { V.month = monthOf(today()); renderMonth(); window.scrollTo(0, 0); });
   el("view").addEventListener("change", onPrefChange);
   el("editorIn").addEventListener("click", onEditorClick);
   el("importFile").addEventListener("change", onImportFile);
