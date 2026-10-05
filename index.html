@@ -130,8 +130,10 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 .sbox h3{font-size:15px;margin:10px 0 2px}
 .smsg{margin:6px 14px;font-size:14px;line-height:1.6}
 .smsg.ok{color:var(--acc)}.smsg.ng{color:var(--ng)}
-.wd{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
-.wd button{width:38px;height:40px;border-radius:10px;background:var(--bg2);font-size:15px}
+/* 勤務日の曜日＝見出しの下の段に7等分（横に並べると iPhone の幅で「日」だけ折り返した・2026-10-05） */
+.kv.wdrow{flex-direction:column;align-items:stretch;gap:8px}
+.wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.wd button{height:40px;border-radius:10px;background:var(--bg2);font-size:15px}
 .wd button.on{background:var(--acc);color:#fff}
 
 /* 下の切り替え */
@@ -638,8 +640,8 @@ function renderSettings() {
   h += '<div class="sbox"><h3>いつもの勤務時間</h3>'
     + '<div class="kv"><span>開始</span><input type="time" data-pref="start" value="' + esc(p.start) + '"></div>'
     + '<div class="kv"><span>終わり</span><input type="time" data-pref="end" value="' + esc(p.end) + '"></div>'
-    + '<div class="kv"><span>いつもの休憩</span><select data-pref="brk">' + [0, 15, 30, 45, 60, 75, 90, 120].map(function (m) { return '<option value="' + m + '"' + (p.brk === m ? " selected" : "") + ">" + dur(m) + "</option>"; }).join("") + "</select></div>"
-    + '<div class="kv"><span>勤務日</span><span class="wd">' + [1, 2, 3, 4, 5, 6, 0].map(function (d) { return '<button data-wd="' + d + '" class="' + (p.workdays.indexOf(d) >= 0 ? "on" : "") + '">' + WD[d] + "</button>"; }).join("") + "</span></div>"
+    + '<div class="kv"><span>いつもの休憩の長さ</span><select data-pref="brk">' + [0, 15, 30, 45, 60, 75, 90, 120].map(function (m) { return '<option value="' + m + '"' + (p.brk === m ? " selected" : "") + ">" + dur(m) + "</option>"; }).join("") + "</select></div>"
+    + '<div class="kv wdrow"><span>勤務日</span><span class="wd">' + [1, 2, 3, 4, 5, 6, 0].map(function (d) { return '<button data-wd="' + d + '" class="' + (p.workdays.indexOf(d) >= 0 ? "on" : "") + '">' + WD[d] + "</button>"; }).join("") + "</span></div>"
     + '<div class="note">勤務日に何も押さなかった日は「記録なし（押し忘れ？）」、それ以外の日は自動で「休み」として表示します。</div></div>';
   h += '<div class="sbox"><h3>働きすぎの目安</h3>'
     + '<div class="kv"><span>1日の目安</span><select data-pref="limit">' + [6, 7, 8, 9, 10, 11, 12].map(function (x) { return '<option value="' + x * 60 + '"' + (p.limit === x * 60 ? " selected" : "") + ">" + x + "時間</option>"; }).join("") + "</select></div>"
