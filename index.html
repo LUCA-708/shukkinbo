@@ -55,14 +55,16 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 .now .clock{font-size:48px;font-weight:bold;letter-spacing:1px;font-variant-numeric:tabular-nums}
 
 /* B ボタン */
-.big{display:block;width:calc(100% - 40px);margin:10px 20px;padding:20px 0;border-radius:18px;text-align:center;
-     font-size:22px;font-weight:bold;color:#fff;background:var(--acc)}
-.big.out{background:var(--ng)}
-.big:disabled{opacity:.3;cursor:default}
-.subbtns{display:flex;gap:10px;margin:0 20px}
-.subbtns button{flex:1;padding:13px 0;border-radius:14px;border:2px solid var(--brk);color:var(--brk);font-weight:bold;font-size:17px;background:var(--card)}
-.subbtns button.on{background:var(--brk);color:#fff}
-.subbtns button:disabled{opacity:.3;cursor:default}
+/* B 下に固定したボタン（次に押す1つを大きく・もう1つを小さく上に） */
+#dock{position:fixed;left:0;right:0;z-index:9;padding:16px 0 10px;background:linear-gradient(rgba(247,246,242,0),var(--bg) 16px)}
+#dock .dockin{max-width:520px;margin:0 auto}
+.dbig{display:block;width:calc(100% - 36px);margin:0 18px;padding:20px 0 16px;border-radius:20px;text-align:center;font-size:24px;font-weight:bold;color:#fff}
+.dbig small{display:block;font-size:13px;font-weight:normal;opacity:.9;margin-top:4px}
+.dbig.gin{background:var(--acc)}.dbig.gout{background:var(--ng)}.dbig.gbrk{background:var(--brk)}
+.dsmall{display:block;width:calc(100% - 36px);margin:0 18px 10px;padding:12px 0;border-radius:14px;text-align:center;font-size:17px;font-weight:bold;background:var(--card);border:2px solid}
+.dsmall.sbrk{border-color:var(--brk);color:var(--brk)}.dsmall.sout{border-color:var(--ng);color:var(--ng)}
+#dock button:disabled{opacity:.4;cursor:default}
+#dock .undo{margin:0 18px 10px}
 .done{margin:12px 20px;padding:14px;border-radius:14px;background:var(--acc-soft);color:var(--acc);text-align:center;font-weight:bold}
 /* 退勤した後（見本 v5）：時計は小さく・今日の作業時間を大きく */
 .now.small{padding:10px 10px 0}
@@ -429,9 +431,10 @@ var KEYS = {
   beforeImport: "shukkinbo_before_import_v1" // 控えで置き換える直前の全件（直前の1回ぶんだけ）
 };
 var UNDO_MS = 5000;
+var LOCK_MS = 1000;   // 押した直後に次のボタンを押せない時間（出勤と同じ場所に退勤が出るため）
 
 var S = { days: {}, prefs: defaultPrefs() };
-var V = { tab: "today", month: "", undo: null, edit: null, saveErr: "" };
+var V = { tab: "today", month: "", undo: null, edit: null, saveErr: "", lockUntil: 0 };
 var setMsg = { backup: "" };
 
 function el(id) { return document.getElementById(id); }
@@ -495,18 +498,36 @@ function renderToday() {
     h += '<button class="btn sec2 edtoday" data-edit="' + t + '">✏ 今日を直す</button>';
     el("view").innerHTML = h;
     return;
-  } else {
-    h += '<button class="big" data-act="in"' + (acts.indexOf("in") < 0 ? " disabled" : "") + ">" + (day && day.start ? "出勤済み " + esc(day.start) : "出勤する") + "</button>";
-    h += '<div class="subbtns"><button data-act="brkIn"' + (acts.indexOf("brkIn") < 0 ? " disabled" : "") + ">☕ 休憩入り</button>"
-      + '<button data-act="brkOut" class="' + (st === "break" ? "on" : "") + '"' + (acts.indexOf("brkOut") < 0 ? " disabled" : "") + ">休憩おわり</button></div>";
-    h += '<button class="big out" data-act="out"' + (acts.indexOf("out") < 0 ? " disabled" : "") + ">退勤する</button>";
-  }
-  if (V.undo && V.undo.until > Date.now()) {
-    h += '<div class="undo"><span>' + esc(V.undo.label) + '</span><button data-undo="1">↩ 取り消す</button></div>';
   }
   h += '<div id="todayStatus">' + statusBox() + "</div>";
   if (day && day.start) h += punchLogHtml(t, day, true);
+  // ボタンは画面の下に固定（ボタン配置の別案 B）。中身がボタンの裏に隠れないよう、同じ高さの空きを最後に置く
+  h += '<div id="dockSpace"></div>' + dockHtml(st, acts);
   el("view").innerHTML = h;
+  placeDock();
+}
+// 次に押す1つだけを大きく、もう1つを小さくその上に（plans/shukkinbo_buttons_mock_v1.html の B）
+//   出勤前＝出勤する／勤務中＝退勤する（大）＋休憩に入る（小）／休憩中＝休憩おわり（大）＋退勤する（小）
+function dockHtml(st, acts) {
+  var locked = Date.now() < V.lockUntil;   // 押した直後1秒は次のボタンを押せない（同じ場所に出る退勤を勢いで押さないため）
+  var dis = locked ? " disabled" : "";
+  var when = '<small>押すと <span class="nowhm">' + hmOf(new Date()) + "</span> で記録</small>";
+  var big = { in: ["gin", "出勤する"], out: ["gout", "退勤する"], brkOut: ["gbrk", "休憩おわり"] };
+  var small = { brkIn: ["sbrk", "☕ 休憩に入る"], out: ["sout", "退勤する"] };
+  var main = st === "break" ? "brkOut" : st === "working" ? "out" : "in";
+  var sub = st === "break" ? "out" : st === "working" ? "brkIn" : null;
+  var h = '<div id="dock"><div class="dockin">';
+  if (V.undo && V.undo.until > Date.now()) h += '<div class="undo"><span>' + esc(V.undo.label) + '</span><button data-undo="1">↩ 取り消す</button></div>';
+  if (sub && acts.indexOf(sub) >= 0) h += '<button class="dsmall ' + small[sub][0] + '" data-act="' + sub + '"' + dis + ">" + small[sub][1] + "</button>";
+  if (acts.indexOf(main) >= 0) h += '<button class="dbig ' + big[main][0] + '" data-act="' + main + '"' + dis + ">" + big[main][1] + when + "</button>";
+  return h + "</div></div>";
+}
+// 固定したボタンを下の切り替えの帯のすぐ上に置き、同じ高さの空きを中身の最後に作る
+function placeDock() {
+  var d = el("dock"), sp = el("dockSpace");
+  if (!d || !sp) return;
+  d.style.bottom = el("tabs").offsetHeight + "px";
+  sp.style.height = d.offsetHeight + "px";
 }
 // U 退勤した後の今日の結果（作業時間を大きく）
 function finishedHtml(t, day) {
@@ -571,6 +592,7 @@ function timeline(day, w) {
   return '<div class="tl">' + segs.map(function (g) { return '<i style="width:' + (g[1] / full * 100).toFixed(2) + "%;background:" + g[0] + '"></i>'; }).join("") + "</div>";
 }
 function doPunch(act) {
+  if (Date.now() < V.lockUntil) return;
   var t = today(), before = S.days[t] ? clone(S.days[t]) : null;
   var hm = hmOf(new Date());
   var next = punch(before, act, hm, nowIso());
@@ -580,6 +602,8 @@ function doPunch(act) {
   var names = { in: "出勤", brkIn: "休憩入り", brkOut: "休憩おわり", out: "退勤" };
   V.undo = { date: t, prev: before, label: names[act] + " " + hm + " を記録しました", until: Date.now() + UNDO_MS };
   setTimeout(function () { if (V.undo && V.undo.until <= Date.now()) { V.undo = null; if (V.tab === "today" && !V.edit) render(); } }, UNDO_MS + 50);
+  V.lockUntil = Date.now() + LOCK_MS;
+  setTimeout(function () { if (V.tab === "today" && !V.edit) render(); }, LOCK_MS + 30);
   render();
 }
 function doUndo() {
@@ -961,6 +985,7 @@ function tick() {
   if (t !== lastDay) { lastDay = t; if (!V.edit) render(); return; }   // 日付が変わったら描き直す
   if (V.tab !== "today" || V.edit) return;
   var c = el("clock"); if (c) c.textContent = hmOf(new Date());
+  document.querySelectorAll(".nowhm").forEach(function (x) { x.textContent = hmOf(new Date()); });
   var s = el("todayStatus"); if (s) s.innerHTML = statusBox();
 }
 
@@ -981,7 +1006,7 @@ function start() {
   el("editorIn").addEventListener("click", onEditorClick);
   el("importFile").addEventListener("change", onImportFile);
   document.addEventListener("visibilitychange", function () { if (!document.hidden && !V.edit) render(); });
-  window.addEventListener("resize", function () { if (V.tab === "month") fitToBottom(el("view")); });
+  window.addEventListener("resize", function () { if (V.tab === "month") fitToBottom(el("view")); if (V.tab === "today") placeDock(); });
   setInterval(tick, 15000);
   render();
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js").catch(function () { /* 控えが作れなくても画面は使える */ });
