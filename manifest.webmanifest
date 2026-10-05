@@ -1,0 +1,14 @@
+{
+  "name": "出勤簿",
+  "short_name": "出勤簿",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F7F6F2",
+  "theme_color": "#F7F6F2",
+  "icons": [
+    { "src": "./icon-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

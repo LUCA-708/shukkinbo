@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="出勤簿">
+<meta name="theme-color" content="#F7F6F2">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<title>出勤簿</title>
+<!--
+  📋 出勤簿（自分の事業の作業時間を記録する・1枚もの）
+
+  🔴 外から読み込むものは一切入れない（電波が無い所でも開くため）。
+  🔴 このファイルを直したら sw.js の版番号（CACHE = "shukkin-vN"）を1つ上げること。
+  🔴 保存名は shukkinbo_ で始める（🧮計算機・📱タスクと同じ住所＝保存の置き場が共有）。
+  中身の計算は下の LOGIC 部分。tests/test_shukkinbo.py が node で動かして確かめている。
+  計画＝C:\Users\yamam\.claude\plans\snappy-honking-raccoon.md ／ 見本＝C:\Claude_code\plans\shukkinbo_mock_v3.html
+  配色＝📱タスク（Task Desk と同じ値）。
+-->
+<style>
+:root{
+  --bg:#F7F6F2; --bg2:#F1EFE8; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --muted:#888780;
+  --line:#E4E1D8; --acc:#2F6F4F; --acc-soft:#E3EFE7; --ng:#C0392B; --ng-soft:#FBE7E4;
+  --warn:#C97A19; --warn-soft:#FBEEDC; --brk:#6B4FA0; --brk-soft:#EEE8F7;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+html{touch-action:manipulation}
+body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Meiryo",sans-serif;font-size:16px;
+     -webkit-text-size-adjust:100%;max-width:520px;margin:0 auto;
+     padding:env(safe-area-inset-top) 0 calc(64px + env(safe-area-inset-bottom))}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+/* 🔴 入力欄は16px以上＝iPhone は16px未満の入力欄を押すと勝手に拡大して戻らない */
+input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
+.hide{display:none!important}
+
+#hdr{display:flex;align-items:center;gap:6px;padding:12px 14px 8px;border-bottom:1px solid var(--line)}
+#hdrTitle,.edtitle{flex:1;font-size:21px;font-weight:bold}
+.edhdr{display:flex;align-items:center;gap:6px;padding:12px 14px 8px;border-bottom:1px solid var(--line)}
+.hbtn{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 12px;font-size:15px;min-height:40px}
+
+/* C 押し忘れの知らせ */
+.warn{display:block;width:calc(100% - 28px);margin:10px 14px 0;background:var(--warn-soft);border:1px solid #E9C48F;color:#7A4A0E;
+      border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.6;text-align:left}
+.warn b{text-decoration:underline}
+
+/* A 時刻 */
+.now{text-align:center;padding:20px 10px 6px}
+.now .date{color:var(--ink2);font-size:15px}
+.now .clock{font-size:48px;font-weight:bold;letter-spacing:1px;font-variant-numeric:tabular-nums}
+
+/* B ボタン */
+.big{display:block;width:calc(100% - 40px);margin:10px 20px;padding:20px 0;border-radius:18px;text-align:center;
+     font-size:22px;font-weight:bold;color:#fff;background:var(--acc)}
+.big.out{background:var(--ng)}
+.big:disabled{opacity:.3;cursor:default}
+.subbtns{display:flex;gap:10px;margin:0 20px}
+.subbtns button{flex:1;padding:13px 0;border-radius:14px;border:2px solid var(--brk);color:var(--brk);font-weight:bold;font-size:17px;background:var(--card)}
+.subbtns button.on{background:var(--brk);color:#fff}
+.subbtns button:disabled{opacity:.3;cursor:default}
+.done{margin:12px 20px;padding:14px;border-radius:14px;background:var(--acc-soft);color:var(--acc);text-align:center;font-weight:bold}
+.undo{display:flex;justify-content:space-between;align-items:center;margin:8px 20px;background:#2C2C2A;color:#fff;border-radius:12px;padding:6px 6px 6px 14px;font-size:14px}
+.undo button{color:#fff;font-weight:bold;padding:8px 12px;min-height:40px}
+
+/* D 今日の状態 */
+.status{margin:12px 16px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;line-height:1.9;font-size:15px}
+.status .big2{font-size:18px;font-weight:bold}
+.tl{position:relative;display:flex;height:16px;border-radius:8px;overflow:hidden;margin:6px 0 2px;background:var(--bg2)}
+.tl i{display:block;height:100%}
+.legend{font-size:12px;color:var(--muted)}
+.overtxt{color:var(--warn);font-weight:bold}
+
+/* E・F 月 */
+.mon{display:flex;align-items:center;justify-content:space-between;padding:10px 8px}
+.mon button{width:48px;height:44px;font-size:20px;color:var(--ink2)}
+.mon .mt{text-align:center}
+.mon .mt b{font-size:18px}
+.mon .mt small{display:block;color:var(--muted);font-size:12px}
+.sum{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:0 12px 10px}
+.sum div{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 4px;text-align:center;font-size:12px;color:var(--ink2)}
+.sum div b{display:block;font-size:18px;color:var(--ink);font-variant-numeric:tabular-nums}
+.sum .wide{grid-column:1/4;background:var(--acc-soft);border-color:#C5DDCD}
+.sum .wide b{display:inline;font-size:20px;color:var(--acc);margin:0 4px}
+.sum .wide span{display:block;font-size:12px;color:var(--ink2)}
+.sum .ov b{color:var(--warn)}
+
+/* G 日ごとの行 */
+.row{display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;border-top:1px solid var(--line);background:var(--card);text-align:left;font-size:15px;min-height:52px}
+.row .d{width:62px;flex:none;font-variant-numeric:tabular-nums}
+.row .d small{color:var(--muted);font-size:12px}
+.row.sat .d small{color:#2D5FA0}.row.sun .d small{color:var(--ng)}
+.row .tm{flex:1;min-width:0}
+.row .tm small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .h{font-weight:bold;width:56px;text-align:right;font-variant-numeric:tabular-nums}
+.row .h small{display:block;font-size:11px;color:var(--warn);font-weight:bold}
+.row.off{background:var(--bg2);color:var(--muted)}
+.row.alert{background:var(--warn-soft)}
+.row.today{box-shadow:inset 4px 0 0 var(--acc)}
+.tag{font-size:11px;border-radius:8px;padding:1px 6px;margin-left:4px;font-weight:bold}
+.tag.m{background:#F5D9B0;color:#7A4A0E}
+.empty{padding:30px 16px;text-align:center;color:var(--muted);line-height:1.8}
+
+/* H 直す画面 */
+#editor{position:fixed;inset:0;background:var(--bg);z-index:20;overflow-y:auto;
+        padding:env(safe-area-inset-top) 0 calc(20px + env(safe-area-inset-bottom))}
+#editor .inner{max-width:520px;margin:0 auto}
+.sheet{padding:6px 16px}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);min-height:56px}
+.kv > span:first-child{color:var(--ink2);flex:none}
+.kv input[type=time],.kv input[type=text],.kv select{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card);min-width:120px;text-align:center}
+.kv input.memo{flex:1;text-align:left;min-width:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.chip{padding:8px 14px;border-radius:16px;font-size:15px;background:var(--bg2);min-height:40px}
+.chip.on{background:var(--ink);color:#fff}
+.btn{display:block;width:100%;text-align:center;padding:13px;border-radius:14px;margin-top:12px;font-weight:bold;font-size:16px}
+.btn.pri{background:var(--acc);color:#fff}
+.btn.sec2{border:1px solid var(--line);background:var(--card)}
+.btn.danger{border:1px solid #E7B4AD;color:var(--ng);background:var(--card)}
+.btn.armed{background:var(--ng);color:#fff;border-color:var(--ng)}
+.err{color:var(--ng);font-size:14px;margin-top:8px;font-weight:bold}
+.note{color:var(--muted);font-size:13px;line-height:1.6;margin-top:6px}
+.hist{font-size:13px;color:var(--ink2);line-height:1.7;padding:8px 0}
+.hist div{border-bottom:1px dashed var(--line);padding:3px 0}
+
+/* 設定 */
+.sbox{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:12px 14px;padding:4px 14px 12px}
+.sbox h3{font-size:15px;margin:10px 0 2px}
+.smsg{margin:6px 14px;font-size:14px;line-height:1.6}
+.smsg.ok{color:var(--acc)}.smsg.ng{color:var(--ng)}
+.wd{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.wd button{width:38px;height:40px;border-radius:10px;background:var(--bg2);font-size:15px}
+.wd button.on{background:var(--acc);color:#fff}
+
+/* 下の切り替え */
+#tabs{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;background:#FBFAF7;border-top:1px solid var(--line);
+      padding-bottom:env(safe-area-inset-bottom);z-index:10}
+#tabs .in{display:flex;width:100%;max-width:520px}
+#tabs button{flex:1;padding:8px 0 10px;font-size:12px;color:var(--muted)}
+#tabs button b{display:block;font-size:20px}
+#tabs button.on{color:var(--acc);font-weight:bold}
+</style>
+</head>
+<body>
+<div id="hdr"><div id="hdrTitle">出勤簿</div></div>
+<main id="view"></main>
+<div id="editor" class="hide"><div class="inner" id="editorIn"></div></div>
+<nav id="tabs"><div class="in">
+  <button data-tab="today"><b>⏱</b>今日</button>
+  <button data-tab="month"><b>📅</b>月の一覧</button>
+  <button data-tab="set"><b>⚙</b>設定</button>
+</div></nav>
+<input type="file" id="importFile" accept=".json,application/json" class="hide">
+
+<script>
+"use strict";
+// ===LOGIC-START===
+// ここから下（LOGIC-END まで）は画面に触らない計算だけ。tests/test_shukkinbo.py が node で動かす。
+
+var AUTO_BREAK_OVER = 360;   // 休憩を押さなかった日は、6時間を超えたときだけ「いつもの休憩」を引く（短い日に1時間引かれないため）
+var EDIT_LOG_MAX = 20;       // 1日に残す「直した記録」の数
+var WD = ["日", "月", "火", "水", "木", "金", "土"];
+
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+function ymd(d) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+function hmOf(d) { return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
+function isDay(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s)); }
+function toDate(s) { var p = s.split("-"); return new Date(+p[0], +p[1] - 1, +p[2]); }
+function addDays(s, n) { var d = toDate(s); d.setDate(d.getDate() + n); return ymd(d); }
+function weekday(s) { return toDate(s).getDay(); }
+function monthOf(s) { return s.slice(0, 7); }
+function addMonths(ym, n) { var p = ym.split("-"); var d = new Date(+p[0], +p[1] - 1 + n, 1); return d.getFullYear() + "-" + pad2(d.getMonth() + 1); }
+function daysInMonth(ym) { var p = ym.split("-"); return new Date(+p[0], +p[1], 0).getDate(); }
+
+// "9:05" "09:05" → 545（分）。読めなければ null。0時を過ぎる勤務は扱わないので 23:59 まで
+function hm2min(s) {
+  var m = /^(\d{1,2}):(\d{2})$/.exec(String(s == null ? "" : s).trim());
+  if (!m) return null;
+  var h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+function min2hm(min) { return pad2(Math.floor(min / 60)) + ":" + pad2(min % 60); }
+// 長さの表示 125 → "2:05"
+function dur(min) {
+  if (min == null || isNaN(min)) return "—";
+  var neg = min < 0; min = Math.abs(Math.round(min));
+  return (neg ? "-" : "") + Math.floor(min / 60) + ":" + pad2(min % 60);
+}
+
+function defaultPrefs() {
+  return { start: "09:00", end: "18:00", brk: 60, workdays: [1, 2, 3, 4, 5], limit: 480, since: "", lastBackup: "" };
+}
+
+// 押して記録した休憩の合計（終わっていない休憩は endMin まで）
+function breakSum(day, endMin) {
+  var t = 0;
+  (day.breaks || []).forEach(function (b) {
+    var s = hm2min(b.s), e = b.e ? hm2min(b.e) : endMin;
+    if (s != null && e != null && e > s) t += e - s;
+  });
+  return t;
+}
+
+// 1日の計算。nowMin＝勤務中の日を「今」まで数えるときの今の時刻（分）。勤務中でない日は渡さなくてよい
+// 戻り値：{span 出勤〜退勤, brk 休憩, brkKind manual/punched/auto/none, work 作業時間, over 目安超え, open 退勤なし}
+function dayWork(day, prefs, nowMin) {
+  if (!day || day.kind !== "work") return null;
+  var s = hm2min(day.start);
+  if (s == null) return null;
+  var e = day.end ? hm2min(day.end) : null;
+  var open = e == null;
+  var endMin = open ? (nowMin == null ? null : nowMin) : e;
+  if (endMin == null) return { span: null, brk: null, brkKind: "none", work: null, over: 0, open: true };
+  if (endMin < s) endMin = s;
+  var span = endMin - s, brk, kind;
+  if (typeof day.brkMin === "number") { brk = day.brkMin; kind = "manual"; }
+  else if ((day.breaks || []).length) { brk = breakSum(day, endMin); kind = "punched"; }
+  else if (!open && span > AUTO_BREAK_OVER) { brk = prefs.brk || 0; kind = "auto"; }
+  else { brk = 0; kind = "none"; }
+  if (brk > span) brk = span;
+  var work = span - brk;
+  var over = Math.max(0, work - (prefs.limit || 480));
+  return { span: span, brk: brk, brkKind: kind, work: work, over: over, open: open };
+}
+
+// 今の状態：none 出勤前／working 勤務中／break 休憩中／done 退勤済み／off 休み
+function stateOf(day) {
+  if (!day) return "none";
+  if (day.kind === "off") return "off";
+  if (!day.start) return "none";
+  if (day.end) return "done";
+  var b = day.breaks || [];
+  if (b.length && !b[b.length - 1].e) return "break";
+  return "working";
+}
+// その状態で押せるボタン（2回押しを防ぐ＝押せないものは出さない／薄くする）
+function allowedActions(day) {
+  var st = stateOf(day);
+  if (st === "none") return ["in"];
+  if (st === "working") return ["brkIn", "out"];
+  if (st === "break") return ["brkOut", "out"];
+  return [];
+}
+function clone(o) { return o == null ? o : JSON.parse(JSON.stringify(o)); }
+
+// ボタンを押した後の1日を返す（元は変えない）。押せない操作なら null
+function punch(day, act, hm, nowIso) {
+  if (allowedActions(day).indexOf(act) < 0) return null;
+  var d = clone(day) || {};
+  if (act === "in") d = { kind: "work", start: hm, end: null, breaks: [], memo: (day && day.memo) || "", edits: (day && day.edits) || [] };
+  else if (act === "brkIn") d.breaks.push({ s: hm, e: null });
+  else if (act === "brkOut") d.breaks[d.breaks.length - 1].e = hm;
+  else if (act === "out") {
+    var b = d.breaks || [];
+    if (b.length && !b[b.length - 1].e) b[b.length - 1].e = hm;   // 休憩中に退勤＝その時刻で休憩も終わり
+    d.end = hm;
+  }
+  d.updatedAt = nowIso;
+  return d;
+}
+
+function isWorkday(date, prefs) { return (prefs.workdays || []).indexOf(weekday(date)) >= 0; }
+
+// 1日の見え方：future 先の日／before 使い始める前／today_blank 今日まだ何もない／working 今日勤務中
+// done 記録あり／forgot 退勤の押し忘れ／off 休み（選んだ）／missing 勤務日なのに記録なし／auto_off 休日で記録なし
+function dayStatus(date, days, prefs, today) {
+  if (date > today) return "future";
+  var day = days[date];
+  if (day) {
+    if (day.kind === "off") return "off";
+    if (!day.start) return date === today ? "today_blank" : (isWorkday(date, prefs) ? "missing" : "auto_off");
+    if (day.end) return "done";
+    return date === today ? "working" : "forgot";
+  }
+  if (date === today) return "today_blank";
+  if (!prefs.since || date < prefs.since) return "before";
+  return isWorkday(date, prefs) ? "missing" : "auto_off";
+}
+
+// 知らせる日（押し忘れ・勤務日の記録なし）を新しい順に。使い始めた日より前は見ない
+function alertsOf(days, prefs, today) {
+  var out = [];
+  if (!prefs.since) return out;
+  var d = addDays(today, -1), guard = 0;
+  while (d >= prefs.since && guard < 4000) {
+    var st = dayStatus(d, days, prefs, today);
+    if (st === "forgot" || st === "missing") out.push({ date: d, status: st });
+    d = addDays(d, -1); guard++;
+  }
+  return out;
+}
+
+// 月の合計（退勤まで入った日だけ数える＝勤務中・押し忘れは入らない）
+function monthSummary(days, ym, prefs) {
+  var n = 0, total = 0, over = 0;
+  Object.keys(days).forEach(function (k) {
+    if (monthOf(k) !== ym) return;
+    var w = dayWork(days[k], prefs);
+    if (!w || w.open || w.work == null) return;
+    n++; total += w.work; over += w.over;
+  });
+  return { days: n, total: total, over: over, avg: n ? Math.round(total / n) : null };
+}
+
+// 直す画面の中身を確かめる。f = {kind, start, end, brk}（brk は "1:00" か ""＝自動）
+function validateEdit(f) {
+  if (f.kind === "off") return { ok: true };
+  var s = hm2min(f.start);
+  if (s == null) return { ok: false, why: "出勤の時刻を入れてください。" };
+  var e = null;
+  if (f.end) {
+    e = hm2min(f.end);
+    if (e == null) return { ok: false, why: "退勤の時刻が読めません。" };
+    if (e <= s) return { ok: false, why: "退勤が出勤より前（または同じ）です。0時を過ぎる勤務は扱えません。" };
+  }
+  if (f.brk) {
+    var b = hm2min(f.brk);
+    if (b == null) return { ok: false, why: "休憩は「1:00」の形で入れてください。" };
+    if (e != null && b >= e - s) return { ok: false, why: "休憩が出勤〜退勤の長さ以上になっています。" };
+  }
+  return { ok: true };
+}
+
+// 直す画面の内容から新しい1日を作る（元は変えない）。brkInit＝画面を開いたときに休憩欄に入れていた値
+function applyEdit(day, f, brkInit, nowIso) {
+  var old = day || {};
+  var d;
+  if (f.kind === "off") d = { kind: "off", memo: f.memo || "" };
+  else {
+    d = { kind: "work", start: f.start, end: f.end || null, breaks: clone(old.kind === "work" ? old.breaks || [] : []), memo: f.memo || "" };
+    if (f.brk && f.brk !== brkInit) d.brkMin = hm2min(f.brk);
+    else if (f.brk && typeof old.brkMin === "number") d.brkMin = old.brkMin;
+  }
+  var log = describeEdit(old, d);
+  d.edits = (old.edits || []).slice();
+  if (log) d.edits.push({ at: nowIso, text: log });
+  if (d.edits.length > EDIT_LOG_MAX) d.edits = d.edits.slice(-EDIT_LOG_MAX);
+  d.updatedAt = nowIso;
+  return { day: d, changed: !!log };
+}
+function describeEdit(a, b) {
+  var p = [];
+  function show(v) { return v ? v : "--:--"; }
+  if ((a.kind || "") !== b.kind) p.push("種類 " + (a.kind === "off" ? "休み" : a.kind === "work" ? "出勤" : "なし") + "→" + (b.kind === "off" ? "休み" : "出勤"));
+  if (b.kind === "work") {
+    if ((a.start || "") !== (b.start || "")) p.push("出勤 " + show(a.start) + "→" + show(b.start));
+    if ((a.end || "") !== (b.end || "")) p.push("退勤 " + show(a.end) + "→" + show(b.end));
+    var ab = typeof a.brkMin === "number" ? dur(a.brkMin) : "自動", bb = typeof b.brkMin === "number" ? dur(b.brkMin) : "自動";
+    if (ab !== bb) p.push("休憩 " + ab + "→" + bb);
+  }
+  if ((a.memo || "") !== (b.memo || "")) p.push("メモ");
+  return p.join("・");
+}
+
+// 控えファイル
+function exportData(days, prefs, now) {
+  return { app: "shukkinbo", version: 1, exportedAt: now.toISOString(), days: days, prefs: prefs };
+}
+function checkImport(o) {
+  if (!o || typeof o !== "object") return { ok: false, why: "ファイルが読めません" };
+  if (o.app !== "shukkinbo") return { ok: false, why: "出勤簿の控えではありません" };
+  if (!o.days || typeof o.days !== "object" || Array.isArray(o.days)) return { ok: false, why: "記録が入っていません" };
+  var keys = Object.keys(o.days);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i], v = o.days[k];
+    if (!isDay(k)) return { ok: false, why: "日付が読めない記録があります（" + k + "）" };
+    if (!v || (v.kind !== "work" && v.kind !== "off")) return { ok: false, why: k + " の記録が壊れています" };
+    if (v.kind === "work" && v.start && hm2min(v.start) == null) return { ok: false, why: k + " の出勤の時刻が壊れています" };
+    if (v.kind === "work" && v.end && hm2min(v.end) == null) return { ok: false, why: k + " の退勤の時刻が壊れています" };
+  }
+  var p = defaultPrefs(), src = o.prefs && typeof o.prefs === "object" ? o.prefs : {};
+  Object.keys(p).forEach(function (key) { if (src[key] != null) p[key] = src[key]; });
+  return { ok: true, data: { days: o.days, prefs: p, exportedAt: o.exportedAt, count: keys.length } };
+}
+// 使い始めた日：設定の日と記録の一番古い日の早い方（控えを読み込んだときに過去の記録も知らせの対象にする）
+function sinceOf(days, since, today) {
+  var keys = Object.keys(days).sort();
+  var first = keys.length ? keys[0] : "";
+  var s = since || today;
+  return first && first < s ? first : s;
+}
+// ===LOGIC-END===
+
+// ───────────────────────── ここから画面 ─────────────────────────
+var KEYS = {
+  days: "shukkinbo_days_v1",
+  prefs: "shukkinbo_prefs_v1",
+  broken: "shukkinbo_broken_v1",            // 読めなかった保存データの退避先（上書きで消さないため）
+  beforeImport: "shukkinbo_before_import_v1" // 控えで置き換える直前の全件（直前の1回ぶんだけ）
+};
+var UNDO_MS = 5000;
+
+var S = { days: {}, prefs: defaultPrefs() };
+var V = { tab: "today", month: "", undo: null, edit: null, saveErr: "" };
+var setMsg = { backup: "" };
+
+function el(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+function today() { return ymd(new Date()); }
+function nowMin() { var d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
+function nowIso() { return new Date().toISOString(); }
+function dlabel(s) { var d = toDate(s); return (d.getMonth() + 1) + "/" + d.getDate(); }
+
+function loadAll() {
+  var rd = null, rp = null;
+  try {
+    rd = localStorage.getItem(KEYS.days);
+    rp = localStorage.getItem(KEYS.prefs);
+    if (rd) S.days = JSON.parse(rd) || {};
+    if (rp) { var p = JSON.parse(rp) || {}, base = defaultPrefs(); Object.keys(base).forEach(function (k) { if (p[k] != null) base[k] = p[k]; }); S.prefs = base; }
+  } catch (e) {
+    // 🔴 読めない保存を空で上書きしない＝退避してから空で始める
+    try { localStorage.setItem(KEYS.broken, JSON.stringify({ at: nowIso(), days: rd, prefs: rp })); } catch (e2) { /* 退避もできない */ }
+    S.days = {}; S.prefs = defaultPrefs();
+    V.saveErr = "⚠️ 保存されていた記録が読めませんでした（中身は別の場所に残してあります）。";
+  }
+  if (!S.prefs.since) { S.prefs.since = sinceOf(S.days, "", today()); saveAll(); }
+}
+function saveAll() {
+  try {
+    localStorage.setItem(KEYS.days, JSON.stringify(S.days));
+    localStorage.setItem(KEYS.prefs, JSON.stringify(S.prefs));
+    V.saveErr = "";
+    return true;
+  } catch (e) {
+    V.saveErr = "⚠️ 保存できませんでした（空き容量を確かめてください）。";
+    return false;
+  }
+}
+
+// ── 今日 ──
+function alertBox() {
+  var a = alertsOf(S.days, S.prefs, today());
+  if (!a.length) return "";
+  var f = a[0];
+  var what = f.status === "forgot" ? "の退勤が押されていません" : "の記録がありません（押し忘れ？）";
+  var more = a.length > 1 ? "　ほか " + (a.length - 1) + "日" : "";
+  return '<button class="warn" data-edit="' + f.date + '">⚠ <b>' + dlabel(f.date) + "（" + WD[weekday(f.date)] + "）" + what + "</b>　押して直す →" + more + "</button>";
+}
+function renderToday() {
+  var t = today(), day = S.days[t], st = stateOf(day), acts = allowedActions(day);
+  var now = new Date();
+  var h = "";
+  if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
+  h += alertBox();
+  h += '<div class="now"><div class="date">' + now.getFullYear() + "年" + (now.getMonth() + 1) + "月" + now.getDate() + "日（" + WD[now.getDay()] + '）</div><div class="clock" id="clock">' + hmOf(now) + "</div></div>";
+  if (st === "off") {
+    h += '<div class="done">今日は「休み」にしてあります</div>';
+    h += '<button class="btn sec2" style="width:calc(100% - 40px);margin:8px 20px" data-edit="' + t + '">直す</button>';
+  } else if (st === "done") {
+    h += '<div class="done">おつかれさまでした（退勤 ' + esc(day.end) + "）</div>";
+  } else {
+    h += '<button class="big" data-act="in"' + (acts.indexOf("in") < 0 ? " disabled" : "") + ">" + (day && day.start ? "出勤済み " + esc(day.start) : "出勤する") + "</button>";
+    h += '<div class="subbtns"><button data-act="brkIn"' + (acts.indexOf("brkIn") < 0 ? " disabled" : "") + ">☕ 休憩入り</button>"
+      + '<button data-act="brkOut" class="' + (st === "break" ? "on" : "") + '"' + (acts.indexOf("brkOut") < 0 ? " disabled" : "") + ">休憩おわり</button></div>";
+    h += '<button class="big out" data-act="out"' + (acts.indexOf("out") < 0 ? " disabled" : "") + ">退勤する</button>";
+  }
+  if (V.undo && V.undo.until > Date.now()) {
+    h += '<div class="undo"><span>' + esc(V.undo.label) + '</span><button data-undo="1">↩ 取り消す</button></div>';
+  }
+  h += '<div id="todayStatus">' + statusBox() + "</div>";
+  el("view").innerHTML = h;
+}
+function statusBox() {
+  var t = today(), day = S.days[t], st = stateOf(day);
+  if (st === "off") return "";
+  if (st === "none") {
+    return '<div class="status">今日：<span class="big2">出勤前</span><br><span class="legend">いつもの時間 ' + esc(S.prefs.start) + "–" + esc(S.prefs.end) + "</span></div>";
+  }
+  var w = dayWork(day, S.prefs, nowMin());
+  var label = st === "working" ? "勤務中" : st === "break" ? "休憩中" : "退勤済み";
+  var h = '<div class="status">今日：<span class="big2">' + label + "</span>";
+  var endU = hm2min(S.prefs.end), nm = nowMin();
+  if (st !== "done" && endU != null) {
+    h += endU > nm ? "　（いつもの終わり " + esc(S.prefs.end) + " まで あと " + dur(endU - nm) + "）" : "　（いつもの終わり " + esc(S.prefs.end) + " を過ぎています）";
+  }
+  h += "<br>出勤 " + esc(day.start) + (day.end ? " ／ 退勤 " + esc(day.end) : "") + " ／ 休憩 " + dur(w.brk)
+    + (w.brkKind === "auto" ? "（いつもの・自動）" : "") + " ／ 作業時間 <b>" + dur(w.work) + "</b>";
+  if (w.over > 0) h += '<br><span class="overtxt">目安の ' + dur(S.prefs.limit) + " を " + dur(w.over) + " 超えています</span>";
+  h += timeline(day, w);
+  h += '<span class="legend">緑＝作業　紫＝休憩　橙＝目安の ' + dur(S.prefs.limit) + " を超えた分</span></div>";
+  return h;
+}
+// 帯の絵：出勤〜（今 or 退勤）を、いつもの長さか実際の長さの長い方を100%として描く
+function timeline(day, w) {
+  var s = hm2min(day.start), e = day.end ? hm2min(day.end) : nowMin();
+  var usual = Math.max(1, (hm2min(S.prefs.end) || 0) - (hm2min(S.prefs.start) || 0));
+  var full = Math.max(usual, e - s, 1);
+  var segs = [], cur = s, worked = 0, limit = S.prefs.limit || 480;
+  function pushWork(a, b) {
+    if (b <= a) return;
+    var len = b - a, ok = Math.max(0, Math.min(len, limit - worked));
+    if (ok > 0) segs.push(["var(--acc)", ok]);
+    if (len - ok > 0) segs.push(["var(--warn)", len - ok]);
+    worked += len;
+  }
+  (day.breaks || []).forEach(function (b) {
+    var bs = hm2min(b.s), be = b.e ? hm2min(b.e) : e;
+    if (bs == null || be == null) return;
+    pushWork(cur, bs); if (be > bs) segs.push(["var(--brk)", be - bs]); cur = Math.max(cur, be);
+  });
+  pushWork(cur, e);
+  return '<div class="tl">' + segs.map(function (g) { return '<i style="width:' + (g[1] / full * 100).toFixed(2) + "%;background:" + g[0] + '"></i>'; }).join("") + "</div>";
+}
+function doPunch(act) {
+  var t = today(), before = S.days[t] ? clone(S.days[t]) : null;
+  var hm = hmOf(new Date());
+  var next = punch(before, act, hm, nowIso());
+  if (!next) return;
+  S.days[t] = next;
+  if (!saveAll()) { if (before) S.days[t] = before; else delete S.days[t]; render(); return; }
+  var names = { in: "出勤", brkIn: "休憩入り", brkOut: "休憩おわり", out: "退勤" };
+  V.undo = { date: t, prev: before, label: names[act] + " " + hm + " を記録しました", until: Date.now() + UNDO_MS };
+  setTimeout(function () { if (V.undo && V.undo.until <= Date.now()) { V.undo = null; if (V.tab === "today" && !V.edit) render(); } }, UNDO_MS + 50);
+  render();
+}
+function doUndo() {
+  if (!V.undo) return;
+  if (V.undo.prev) S.days[V.undo.date] = V.undo.prev; else delete S.days[V.undo.date];
+  V.undo = null;
+  saveAll(); render();
+}
+
+// ── 月の一覧 ──
+function renderMonth() {
+  var t = today(), ym = V.month || monthOf(t);
+  var p = ym.split("-");
+  var sum = monthSummary(S.days, ym, S.prefs), prev = monthSummary(S.days, addMonths(ym, -1), S.prefs);
+  var h = "";
+  if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
+  h += '<div class="mon"><button data-mon="-1">◀</button><div class="mt"><b>' + (+p[0]) + "年" + (+p[1]) + "月</b><small>" + (+p[1]) + "/1〜" + (+p[1]) + "/" + daysInMonth(ym) + '</small></div><button data-mon="1">▶</button></div>';
+  h += '<div class="sum"><div>作業した日<b>' + sum.days + "日</b></div><div>作業時間<b>" + dur(sum.total) + '</b></div><div class="ov">' + dur(S.prefs.limit) + "超<b>" + dur(sum.over) + "</b></div>"
+    + '<div class="wide">1日平均<b>' + dur(sum.avg) + "</b><span>先月 " + dur(prev.avg) + " ／ 先月の合計 " + dur(prev.total) + "（退勤まで入った日だけ数えます）</span></div></div>";
+  var rows = "", last = daysInMonth(ym);
+  for (var i = 1; i <= last; i++) {
+    var d = ym + "-" + pad2(i);
+    var st = dayStatus(d, S.days, S.prefs, t);
+    if (st === "future") break;
+    if (st === "before") continue;
+    rows += rowHtml(d, st, t);
+  }
+  h += rows || '<div class="empty">この月の記録はありません</div>';
+  el("view").innerHTML = h;
+}
+function rowHtml(d, st, t) {
+  var wd = weekday(d), day = S.days[d];
+  var cls = "row" + (wd === 6 ? " sat" : wd === 0 ? " sun" : "") + (d === t ? " today" : "");
+  var tm = "", hh = "";
+  if (st === "done" || st === "working" || st === "forgot") {
+    var w = dayWork(day, S.prefs, d === t ? nowMin() : null);
+    var memo = day.memo ? "・" + esc(day.memo) : "";
+    if (st === "forgot") { cls += " alert"; tm = esc(day.start) + ' – <b style="color:var(--warn)">退勤なし</b><span class="tag m">押し忘れ</span>'; hh = "—"; }
+    else {
+      tm = esc(day.start) + " – " + (day.end ? esc(day.end) : "（勤務中）") + "<small>休憩 " + dur(w.brk) + (w.brkKind === "auto" ? "（自動）" : "") + memo + "</small>";
+      hh = dur(w.work) + (w.over > 0 ? "<small>+" + dur(w.over) + "</small>" : "");
+    }
+  } else if (st === "off") { cls += " off"; tm = "休み" + (day.memo ? "<small>" + esc(day.memo) + "</small>" : ""); }
+  else if (st === "auto_off") { cls += " off"; tm = "休み<small>休日で記録なし＝自動で休み</small>"; }
+  else if (st === "missing") { cls += " alert"; tm = '<b style="color:var(--warn)">記録なし</b>（勤務日）<small>押し忘れ？ → 押して直す</small>'; hh = "—"; }
+  else if (st === "today_blank") { tm = "（今日・まだ記録なし）"; }
+  return '<button class="' + cls + '" data-edit="' + d + '"><span class="d">' + dlabel(d) + "<small> " + WD[wd] + '</small></span><span class="tm">' + tm + '</span><span class="h">' + hh + "</span></button>";
+}
+
+// ── 1日を直す ──
+function openEditor(date) {
+  var day = S.days[date];
+  var w = day && day.kind === "work" ? dayWork(day, S.prefs, date === today() ? nowMin() : null) : null;
+  var brkInit = "";
+  if (day && typeof day.brkMin === "number") brkInit = dur(day.brkMin);
+  else if (w && w.brkKind === "punched" && !w.open) brkInit = dur(w.brk);
+  V.edit = { date: date, kind: day ? day.kind : "work", start: day && day.start || "", end: day && day.end || "", brk: brkInit, brkInit: brkInit, memo: day && day.memo || "", err: "", armedDel: false };
+  renderEditor();
+  el("editor").classList.remove("hide");
+  el("editor").scrollTop = 0;
+}
+function closeEditor() { V.edit = null; el("editor").classList.add("hide"); render(); }
+function renderEditor() {
+  var e = V.edit, d = e.date, day = S.days[d];
+  var h = '<div class="edhdr"><div class="edtitle">' + dlabel(d) + "（" + WD[weekday(d)] + '）を直す</div><button class="hbtn" data-ed="close">閉じる</button></div><div class="sheet">';
+  h += '<div class="kv"><span>種類</span><span class="chips"><button class="chip' + (e.kind !== "off" ? " on" : "") + '" data-ed="kindWork">出勤</button><button class="chip' + (e.kind === "off" ? " on" : "") + '" data-ed="kindOff">休み</button></span></div>';
+  if (e.kind !== "off") {
+    h += '<button class="btn sec2" data-ed="usual">⏱ いつもの時間で埋める（' + esc(S.prefs.start) + "–" + esc(S.prefs.end) + "・休憩" + dur(S.prefs.brk) + "）</button>";
+    h += '<div class="kv"><span>出勤</span><input type="time" id="edStart" value="' + esc(e.start) + '"></div>';
+    h += '<div class="kv"><span>退勤</span><input type="time" id="edEnd" value="' + esc(e.end) + '"' + (e.end ? "" : ' style="border-color:var(--warn)"') + "></div>";
+    h += '<div class="kv"><span>休憩</span><input type="text" id="edBrk" inputmode="numeric" placeholder="自動" value="' + esc(e.brk) + '"></div>';
+    h += '<div class="note">休憩を空にすると自動＝押した休憩の合計、押していなければ 6時間を超えた日だけ「いつもの休憩（' + dur(S.prefs.brk) + "）」を引きます。</div>";
+  }
+  h += '<div class="kv"><span>メモ</span><input type="text" class="memo" id="edMemo" value="' + esc(e.memo) + '" placeholder="例：仕入れ"></div>';
+  if (e.err) h += '<div class="err">' + esc(e.err) + "</div>";
+  h += '<button class="btn pri" data-ed="save">保存</button>';
+  if (day) h += '<button class="btn danger' + (e.armedDel ? " armed" : "") + '" data-ed="del">' + (e.armedDel ? "もう一度押すと記録を消します" : "この日の記録を消す（空欄に戻す）") + "</button>";
+  if (day && day.edits && day.edits.length) {
+    h += '<h3 style="font-size:15px;margin:18px 0 4px">直した記録</h3><div class="hist">';
+    day.edits.slice().reverse().forEach(function (x) { var t = new Date(x.at); h += "<div>" + (t.getMonth() + 1) + "/" + t.getDate() + " " + hmOf(t) + "　" + esc(x.text) + "</div>"; });
+    h += "</div>";
+  }
+  h += "</div>";
+  el("editorIn").innerHTML = h;
+}
+function readEditor() {
+  var e = V.edit;
+  if (el("edStart")) { e.start = el("edStart").value; e.end = el("edEnd").value; e.brk = el("edBrk").value.trim(); }
+  if (el("edMemo")) e.memo = el("edMemo").value;
+}
+function onEditorClick(ev) {
+  var b = ev.target.closest("[data-ed]");
+  if (!b || !V.edit) return;
+  var a = b.getAttribute("data-ed"), e = V.edit;
+  if (a !== "del") e.armedDel = false;
+  if (a === "close") { closeEditor(); return; }
+  readEditor();
+  if (a === "kindWork") { e.kind = "work"; e.err = ""; }
+  else if (a === "kindOff") { e.kind = "off"; e.err = ""; }
+  else if (a === "usual") { e.start = S.prefs.start; e.end = S.prefs.end; e.brk = dur(S.prefs.brk); e.err = ""; }
+  else if (a === "del") {
+    if (!e.armedDel) { e.armedDel = true; renderEditor(); return; }
+    delete S.days[e.date]; saveAll(); closeEditor(); return;
+  } else if (a === "save") {
+    var f = { kind: e.kind, start: e.start, end: e.end, brk: e.brk, memo: e.memo.trim() };
+    var chk = validateEdit(f);
+    if (!chk.ok) { e.err = chk.why; renderEditor(); return; }
+    var before = S.days[e.date];
+    var r = applyEdit(before, f, e.brkInit, nowIso());
+    S.days[e.date] = r.day;
+    if (!saveAll()) { if (before) S.days[e.date] = before; else delete S.days[e.date]; e.err = V.saveErr; renderEditor(); return; }
+    closeEditor(); return;
+  }
+  renderEditor();
+}
+
+// ── 設定 ──
+function renderSettings() {
+  var p = S.prefs, h = "";
+  if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
+  h += '<div class="sbox"><h3>いつもの勤務時間</h3>'
+    + '<div class="kv"><span>開始</span><input type="time" data-pref="start" value="' + esc(p.start) + '"></div>'
+    + '<div class="kv"><span>終わり</span><input type="time" data-pref="end" value="' + esc(p.end) + '"></div>'
+    + '<div class="kv"><span>いつもの休憩</span><select data-pref="brk">' + [0, 15, 30, 45, 60, 75, 90, 120].map(function (m) { return '<option value="' + m + '"' + (p.brk === m ? " selected" : "") + ">" + dur(m) + "</option>"; }).join("") + "</select></div>"
+    + '<div class="kv"><span>勤務日</span><span class="wd">' + [1, 2, 3, 4, 5, 6, 0].map(function (d) { return '<button data-wd="' + d + '" class="' + (p.workdays.indexOf(d) >= 0 ? "on" : "") + '">' + WD[d] + "</button>"; }).join("") + "</span></div>"
+    + '<div class="note">勤務日に何も押さなかった日は「記録なし（押し忘れ？）」、それ以外の日は自動で「休み」として表示します。</div></div>';
+  h += '<div class="sbox"><h3>働きすぎの目安</h3>'
+    + '<div class="kv"><span>1日の目安</span><select data-pref="limit">' + [6, 7, 8, 9, 10, 11, 12].map(function (x) { return '<option value="' + x * 60 + '"' + (p.limit === x * 60 ? " selected" : "") + ">" + x + "時間</option>"; }).join("") + "</select></div>"
+    + '<div class="note">超えた分を「' + dur(p.limit) + "超」として数えます（お金の計算はしません）。</div></div>";
+  h += '<div class="sbox"><h3>控え</h3>'
+    + '<div class="note">記録はこの iPhone の中にだけあります。機種変更や故障に備えて、ときどき「ファイル」に保存してください。</div>'
+    + '<div class="kv"><span>最後に保存した日</span><span>' + (p.lastBackup ? esc(p.lastBackup) : "まだ保存していません") + "</span></div>"
+    + '<button class="btn pri" data-set="export">📤 控えファイルを保存する</button>'
+    + '<button class="btn sec2" data-set="import">📥 控えファイルから戻す</button></div>';
+  if (setMsg.backup) h += '<div class="smsg ' + (setMsg.backup.indexOf("⚠") === 0 ? "ng" : "ok") + '">' + esc(setMsg.backup) + "</div>";
+  h += '<div class="note" style="margin:16px">使い始めた日：' + esc(p.since) + "（この日より前の空欄は知らせません）</div>";
+  el("view").innerHTML = h;
+}
+function onPrefChange(ev) {
+  var t = ev.target, k = t.getAttribute("data-pref");
+  if (!k) return;
+  var v = t.value;
+  if (k === "start" || k === "end") { if (hm2min(v) == null) return; S.prefs[k] = v; }
+  else S.prefs[k] = +v;
+  saveAll(); renderSettings();
+}
+function toggleWorkday(d) {
+  var w = S.prefs.workdays.slice(), i = w.indexOf(d);
+  if (i >= 0) w.splice(i, 1); else w.push(d);
+  S.prefs.workdays = w.sort();
+  saveAll(); renderSettings();
+}
+
+function backupText() { return JSON.stringify(exportData(S.days, S.prefs, new Date()), null, 1); }
+function backupName() { var d = new Date(); return "shukkinbo_" + ymd(d).replace(/-/g, "") + "_" + pad2(d.getHours()) + pad2(d.getMinutes()) + ".json"; }
+function markBackedUp(text) { S.prefs.lastBackup = today(); setMsg.backup = text; saveAll(); if (V.tab === "set") renderSettings(); }
+function saveBackupFile() {
+  var text = backupText(), name = backupName(), n = Object.keys(S.days).length;
+  var file = null;
+  try { file = new File([text], name, { type: "application/json" }); } catch (e) { file = null; }
+  // iPhone は「共有」から「ファイルに保存」できる。使えなければダウンロード
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file] }).then(function () {
+      markBackedUp("✅ 控えを書き出しました（" + name + "・" + n + "日分）。");
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") { setMsg.backup = "書き出しをやめました（保存した日は変えていません）。"; renderSettings(); return; }
+      setMsg.backup = "⚠️ 書き出せませんでした（" + (err && err.message ? err.message : "理由不明") + "）。"; renderSettings();
+    });
+    return;
+  }
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  markBackedUp("✅ 控えを書き出しました（" + name + "・" + n + "日分）。");
+}
+var pendingImport = null;
+function onImportFile(e) {
+  var f = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    var obj = null;
+    try { obj = JSON.parse(String(rd.result)); } catch (err) { obj = null; }
+    var chk = checkImport(obj);
+    if (!chk.ok) { pendingImport = null; setMsg.backup = "⚠️ 取り込めません：" + chk.why + "（今の記録はそのままです）"; renderSettings(); return; }
+    pendingImport = chk.data;
+    var when = isNaN(new Date(chk.data.exportedAt).getTime()) ? "日付不明" : ymd(new Date(chk.data.exportedAt));
+    // 🔴 置き換える前に件数を見せて、もう一度押させる
+    setMsg.backup = "⚠️ 今の " + Object.keys(S.days).length + "日分を、控えの " + chk.data.count + "日分（" + when + " の控え）で置き換えます。よければ下の赤いボタンを押してください。";
+    renderSettings();
+    var b = document.createElement("button");
+    b.className = "btn armed"; b.style.width = "calc(100% - 28px)"; b.style.margin = "0 14px";
+    b.setAttribute("data-set", "importGo"); b.textContent = "置き換える（" + chk.data.count + "日分）";
+    el("view").appendChild(b);
+  };
+  rd.readAsText(f);
+}
+function doImport() {
+  if (!pendingImport) return;
+  // 🔴 置き換える前に今の全件を写しておく（押し間違えたときに戻せるように）
+  try { localStorage.setItem(KEYS.beforeImport, JSON.stringify({ at: nowIso(), days: S.days, prefs: S.prefs })); }
+  catch (e) { setMsg.backup = "⚠️ 今の記録を写せなかったので取り込みを止めました（空き容量を確かめてください）。"; pendingImport = null; renderSettings(); return; }
+  var keepBackup = S.prefs.lastBackup;
+  S.days = pendingImport.days;
+  S.prefs = pendingImport.prefs;
+  S.prefs.lastBackup = keepBackup;
+  S.prefs.since = sinceOf(S.days, S.prefs.since, today());
+  var n = Object.keys(S.days).length;
+  pendingImport = null;
+  setMsg.backup = saveAll() ? "✅ 控えから戻しました（" + n + "日分）。" : V.saveErr;
+  renderSettings();
+}
+
+// ── 共通 ──
+function render() {
+  document.querySelectorAll("#tabs button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-tab") === V.tab); });
+  el("hdrTitle").textContent = V.tab === "today" ? "出勤簿" : V.tab === "month" ? "月の一覧" : "設定";
+  if (V.tab === "today") renderToday();
+  else if (V.tab === "month") renderMonth();
+  else renderSettings();
+}
+function onViewClick(ev) {
+  var b;
+  if ((b = ev.target.closest("[data-act]"))) { if (!b.disabled) doPunch(b.getAttribute("data-act")); return; }
+  if ((b = ev.target.closest("[data-undo]"))) { doUndo(); return; }
+  if ((b = ev.target.closest("[data-edit]"))) { openEditor(b.getAttribute("data-edit")); return; }
+  if ((b = ev.target.closest("[data-mon]"))) { V.month = addMonths(V.month || monthOf(today()), +b.getAttribute("data-mon")); renderMonth(); return; }
+  if ((b = ev.target.closest("[data-wd]"))) { toggleWorkday(+b.getAttribute("data-wd")); return; }
+  if ((b = ev.target.closest("[data-set]"))) {
+    var a = b.getAttribute("data-set");
+    if (a === "export") saveBackupFile();
+    else if (a === "import") { pendingImport = null; setMsg.backup = ""; el("importFile").click(); }
+    else if (a === "importGo") doImport();
+  }
+}
+var lastDay = "";
+function tick() {
+  var t = today();
+  if (t !== lastDay) { lastDay = t; if (!V.edit) render(); return; }   // 日付が変わったら描き直す
+  if (V.tab !== "today" || V.edit) return;
+  var c = el("clock"); if (c) c.textContent = hmOf(new Date());
+  var s = el("todayStatus"); if (s) s.innerHTML = statusBox();
+}
+
+function start() {
+  loadAll();
+  lastDay = today();
+  el("tabs").addEventListener("click", function (ev) {
+    var b = ev.target.closest("[data-tab]"); if (!b) return;
+    V.tab = b.getAttribute("data-tab");
+    if (V.tab === "month") V.month = monthOf(today());
+    setMsg.backup = ""; pendingImport = null;
+    render(); window.scrollTo(0, 0);
+  });
+  el("view").addEventListener("click", onViewClick);
+  el("view").addEventListener("change", onPrefChange);
+  el("editorIn").addEventListener("click", onEditorClick);
+  el("importFile").addEventListener("change", onImportFile);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && !V.edit) render(); });
+  setInterval(tick, 15000);
+  render();
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js").catch(function () { /* 控えが作れなくても画面は使える */ });
+}
+start();
+</script>
+</body>
+</html>
