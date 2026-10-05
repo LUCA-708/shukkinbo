@@ -94,6 +94,9 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 .overtxt{color:var(--warn);font-weight:bold}
 
 /* E・F 月 */
+/* めくり（📱タスクと同じ）：外枠は横のはみ出しだけ隠す（縦はそのまま＝clip。hidden だと縦にもスクロール枠ができる）・隣の2枚は外枠の中に重ねて置く */
+.pgstage{position:relative;overflow-x:hidden;overflow-x:clip}
+.pgpane{position:absolute;top:0;left:0;width:100%;box-sizing:border-box;pointer-events:none}
 .mon{display:flex;align-items:center;justify-content:space-between;padding:10px 8px}
 .mon button{width:48px;height:44px;font-size:20px;color:var(--ink2)}
 .mon .mt{text-align:center}
@@ -591,11 +594,17 @@ function renderMonth() {
   var t = today(), ym = V.month || monthOf(t);
   var p = ym.split("-");
   el("goMonth").classList.toggle("hide", ym === monthOf(t));   // 今月を見ているときは出さない（📱タスクと同じ）
-  var sum = monthSummary(S.days, ym, S.prefs), prev = monthSummary(S.days, addMonths(ym, -1), S.prefs);
   var h = "";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
   h += '<div class="mon"><button data-mon="-1">◀</button><div class="mt"><b>' + (+p[0]) + "年" + (+p[1]) + "月</b><small>" + (+p[1]) + "/1〜" + (+p[1]) + "/" + daysInMonth(ym) + '</small></div><button data-mon="1">▶</button></div>';
-  h += '<div class="sum"><div>作業した日<b>' + sum.days + "日</b></div><div>作業時間<b>" + dur(sum.total) + '</b></div><div class="ov">' + dur(S.prefs.limit) + "超<b>" + dur(sum.over) + "</b></div>"
+  // 合計と日ごとの行はめくりの中（指についてくる）。見出し（年月・◀▶）は動かさず、めくり終わってから変わる＝📱タスクのカレンダーと同じ
+  h += '<div id="monStage" class="pgstage"><div id="monBody">' + monthBodyHtml(ym) + "</div></div>";
+  el("view").innerHTML = h;
+}
+function monthBodyHtml(ym) {
+  var t = today();
+  var sum = monthSummary(S.days, ym, S.prefs), prev = monthSummary(S.days, addMonths(ym, -1), S.prefs);
+  var h = '<div class="sum"><div>作業した日<b>' + sum.days + "日</b></div><div>作業時間<b>" + dur(sum.total) + '</b></div><div class="ov">' + dur(S.prefs.limit) + "超<b>" + dur(sum.over) + "</b></div>"
     + '<div class="wide">1日平均<b>' + dur(sum.avg) + "</b><span>先月 " + dur(prev.avg) + " ／ 先月の合計 " + dur(prev.total) + "（退勤まで入った日だけ数えます）</span></div></div>";
   var rows = "", last = daysInMonth(ym);
   for (var i = 1; i <= last; i++) {
@@ -605,8 +614,130 @@ function renderMonth() {
     if (st === "before") continue;
     rows += rowHtml(d, st, t);
   }
-  h += rows || '<div class="empty">この月の記録はありません</div>';
-  el("view").innerHTML = h;
+  return h + (rows || '<div class="empty">この月の記録はありません</div>');
+}
+/** 見ている月を n か月動かす（◀▶・今月ボタン）＝めくりと同じ向きに滑らせてから切り替える */
+function stepMonth(to) {
+  var cur = V.month || monthOf(today());
+  if (to === cur) return;
+  var n = to > cur ? 1 : -1;
+  monthPager.slide(n, monthBodyHtml(to), function () { V.month = to; renderMonth(); });
+}
+
+// ── 指についてくるめくり（📱タスク iphone_todo/index.html の makePager を移植）─────────────
+// stage＝外枠（はみ出しを隠す）／content＝本物の中身。横に動かすと隣の2枚（opts.html(-1/+1)）を左右に置いて一緒に動かし、
+// 離したとき十分動いていれば滑らせて opts.commit(n)、足りなければ元へ戻す。縦の動きは今までどおりスクロールに任せる。
+// 🔴 タスクとの違いは1つだけ＝月の一覧は表示のたびに作り直すので、stage・content は「指を置いた瞬間」に opts から取り直す
+//    （タスクは作り直さない枠に一度だけ付けている）。指を受ける所（hit）と document への登録は1回だけ。
+// 🔴 iPhone 本体の「視差効果を減らす」がオンなら、指について来ずに離した時点で切り替えるだけ
+var REDUCE_MOTION = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+var PAGE_MS = 220, BACK_MS = 180;
+var FLICK_SPEED = 0.35, FLICK_MIN_PX = 20;   // はじき＝秒速350px以上で20px以上動いた（タスクと同じ値）
+var swipedAt = 0;          // めくった時刻＝直後の「押した」を1回捨てる（行の直す画面が開くのを防ぐ）
+function makePager(hit, opts) {
+  var g = null, busy = false, panes = [], stage = null, content = null;
+  // 🔴 指を受ける所全体に「横はアプリ・縦は画面のスクロール」を付ける。付けないと横に動かした瞬間に
+  //    iPhone が操作を持っていき、アプリには「やめた（pointercancel）」しか届かない（タスク 09-27 実機）
+  hit.style.touchAction = "pan-y";
+  function place(dx, ms) {
+    var list = [panes[0], content, panes[1]];
+    list.forEach(function (p, i) {
+      if (!p) return;
+      p.style.transition = ms ? "transform " + ms + "ms ease-out" : "none";
+      p.style.transform = "translateX(calc(" + ((i - 1) * 100) + "% + " + dx + "px))";
+    });
+  }
+  function build(prevHtml, nextHtml) {
+    clear();
+    [prevHtml, nextHtml].forEach(function (html, i) {
+      var p = document.createElement("div");
+      p.className = "pgpane";
+      p.setAttribute("aria-hidden", "true");
+      p.innerHTML = html == null ? "" : html;
+      stage.appendChild(p);
+      panes[i] = p;
+    });
+  }
+  function clear() {
+    panes.forEach(function (p) { if (p && p.parentNode) p.parentNode.removeChild(p); });
+    panes = [];
+    if (content) { content.style.transition = "none"; content.style.transform = ""; }
+  }
+  function grab() { stage = opts.stage(); content = opts.content(); return !!(stage && content); }
+  /** 指なしで n の向きへ滑らせる（◀▶・今月ボタン用）。html＝入ってくる側の中身。done は滑り終わってから */
+  function slide(n, html, done) {
+    if (busy) return;
+    if (REDUCE_MOTION || !grab()) { done(); return; }
+    busy = true;
+    build(n < 0 ? html : null, n > 0 ? html : null);
+    place(0, 0);
+    stage.offsetWidth;               // 置いた位置を確定させてから動かす（しないと滑らずに飛ぶ）
+    place(-n * stage.clientWidth, PAGE_MS);
+    setTimeout(function () { busy = false; clear(); done(); }, PAGE_MS + 20);
+  }
+  hit.addEventListener("pointerdown", function (e) {
+    if (busy || (e.pointerType === "mouse" && e.button !== 0)) return;
+    if (opts.canStart && !opts.canStart(e)) return;
+    if (!grab()) return;
+    g = { x: e.clientX, y: e.clientY, dx: 0, lock: null, id: e.pointerId, pts: [{ x: e.clientX, t: e.timeStamp }], lastT: e.timeStamp };
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!g || e.pointerId !== g.id) return;
+    var dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (g.lock === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      g.lock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (g.lock === "y") { g = null; return; }
+      if (!REDUCE_MOTION) build(opts.html(-1), opts.html(1));
+    }
+    if (g.lock !== "x") return;
+    g.dx = dx;
+    // 指の通り道（直近 0.15秒ぶん）＝離したときの速さを「最後の 0.1秒」だけで測るため
+    g.pts.push({ x: e.clientX, t: e.timeStamp }); g.lastT = e.timeStamp;
+    while (g.pts.length > 2 && g.pts[0].t < e.timeStamp - 150) g.pts.shift();
+    if (!REDUCE_MOTION) place(dx, 0);
+  });
+  function up(e) {
+    if (!g || e.pointerId !== g.id) return;
+    var st = g; g = null;
+    if (st.lock !== "x") return;
+    swipedAt = Date.now();
+    var w = stage.clientWidth, n = st.dx < 0 ? 1 : -1;
+    // めくる＝十分動かした、または短くても同じ向きに速くはじいた（止まってから離したらはじきにしない）
+    //   🔴 速さは最後の 0.1秒だけで測る（前の動きの速さを引きずると、止めてから逆にはじいたのを取り違える）
+    var still = e.timeStamp - st.lastT > 80;
+    var recent = st.pts.filter(function (q) { return q.t >= st.lastT - 100; });
+    var a = recent[0], z = recent[recent.length - 1];
+    var vx = recent.length >= 2 && z.t > a.t ? (z.x - a.x) / (z.t - a.t) : 0;
+    var flick = !still && Math.abs(st.dx) >= FLICK_MIN_PX && Math.abs(vx) >= FLICK_SPEED && (vx < 0) === (st.dx < 0);
+    if ((Math.abs(st.dx) < Math.min(60, w * 0.2) && !flick) || e.type === "pointercancel") {
+      if (REDUCE_MOTION) return;
+      busy = true; place(0, BACK_MS);
+      setTimeout(function () { busy = false; clear(); }, BACK_MS + 20);
+      return;
+    }
+    if (REDUCE_MOTION) { opts.commit(n); return; }
+    busy = true;
+    place(-n * w, PAGE_MS);
+    setTimeout(function () { busy = false; clear(); opts.commit(n); }, PAGE_MS + 20);
+  }
+  document.addEventListener("pointerup", up);
+  document.addEventListener("pointercancel", up);
+  // めくった直後の「押した」を捨てる（押した場所の行が反応しないように）
+  hit.addEventListener("click", function (e) {
+    if (Date.now() - swipedAt < 400) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  return { slide: slide };
+}
+var monthPager = null;
+function setupPagers() {
+  monthPager = makePager(el("view"), {
+    // 指を受けるのは月の一覧の画面全体（見出し・合計・空いた所でも）。直す画面が開いているときは受けない
+    canStart: function () { return V.tab === "month" && !V.edit; },
+    stage: function () { return V.tab === "month" ? el("monStage") : null; },
+    content: function () { return V.tab === "month" ? el("monBody") : null; },
+    html: function (n) { return monthBodyHtml(addMonths(V.month || monthOf(today()), n)); },
+    commit: function (n) { V.month = addMonths(V.month || monthOf(today()), n); renderMonth(); }
+  });
 }
 function rowHtml(d, st, t) {
   var wd = weekday(d), day = S.days[d];
@@ -807,7 +938,7 @@ function onViewClick(ev) {
   if ((b = ev.target.closest("[data-act]"))) { if (!b.disabled) doPunch(b.getAttribute("data-act")); return; }
   if ((b = ev.target.closest("[data-undo]"))) { doUndo(); return; }
   if ((b = ev.target.closest("[data-edit]"))) { openEditor(b.getAttribute("data-edit")); return; }
-  if ((b = ev.target.closest("[data-mon]"))) { V.month = addMonths(V.month || monthOf(today()), +b.getAttribute("data-mon")); renderMonth(); return; }
+  if ((b = ev.target.closest("[data-mon]"))) { stepMonth(addMonths(V.month || monthOf(today()), +b.getAttribute("data-mon"))); return; }
   if ((b = ev.target.closest("[data-wd]"))) { toggleWorkday(+b.getAttribute("data-wd")); return; }
   if ((b = ev.target.closest("[data-set]"))) {
     var a = b.getAttribute("data-set");
@@ -835,8 +966,9 @@ function start() {
     setMsg.backup = ""; pendingImport = null;
     render(); window.scrollTo(0, 0);
   });
+  setupPagers();
   el("view").addEventListener("click", onViewClick);
-  el("goMonth").addEventListener("click", function () { V.month = monthOf(today()); renderMonth(); window.scrollTo(0, 0); });
+  el("goMonth").addEventListener("click", function () { stepMonth(monthOf(today())); window.scrollTo(0, 0); });
   el("view").addEventListener("change", onPrefChange);
   el("editorIn").addEventListener("click", onEditorClick);
   el("importFile").addEventListener("change", onImportFile);
