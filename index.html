@@ -600,6 +600,7 @@ function renderMonth() {
   // 合計と日ごとの行はめくりの中（指についてくる）。見出し（年月・◀▶）は動かさず、めくり終わってから変わる＝📱タスクのカレンダーと同じ
   h += '<div id="monStage" class="pgstage"><div id="monBody">' + monthBodyHtml(ym) + "</div></div>";
   el("view").innerHTML = h;
+  fitToBottom(el("view"));   // 下の空いた所でもめくれるように、指を受ける所を下の切り替えの帯まで伸ばす（📱タスクと同じ）
 }
 function monthBodyHtml(ym) {
   var t = today();
@@ -615,6 +616,12 @@ function monthBodyHtml(ym) {
     rows += rowHtml(d, st, t);
   }
   return h + (rows || '<div class="empty">この月の記録はありません</div>');
+}
+// 箱の高さを画面の下（切り替えの帯の上）まで伸ばす（📱タスク fitToBottom の移植）
+function fitToBottom(box) {
+  box.style.minHeight = "";
+  var top = box.getBoundingClientRect().top + window.scrollY;
+  box.style.minHeight = Math.max(0, window.innerHeight - el("tabs").offsetHeight - top) + "px";
 }
 /** 見ている月を n か月動かす（◀▶・今月ボタン）＝めくりと同じ向きに滑らせてから切り替える */
 function stepMonth(to) {
@@ -929,6 +936,7 @@ function render() {
   document.querySelectorAll("#tabs button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-tab") === V.tab); });
   el("hdrTitle").textContent = V.tab === "today" ? "出勤簿" : V.tab === "month" ? "月の一覧" : "設定";
   if (V.tab !== "month") el("goMonth").classList.add("hide");
+  if (V.tab !== "month") el("view").style.minHeight = "";
   if (V.tab === "today") renderToday();
   else if (V.tab === "month") renderMonth();
   else renderSettings();
@@ -973,6 +981,7 @@ function start() {
   el("editorIn").addEventListener("click", onEditorClick);
   el("importFile").addEventListener("change", onImportFile);
   document.addEventListener("visibilitychange", function () { if (!document.hidden && !V.edit) render(); });
+  window.addEventListener("resize", function () { if (V.tab === "month") fitToBottom(el("view")); });
   setInterval(tick, 15000);
   render();
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js").catch(function () { /* 控えが作れなくても画面は使える */ });
