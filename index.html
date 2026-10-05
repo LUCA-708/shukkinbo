@@ -56,7 +56,10 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 
 /* B ボタン */
 /* B 下に固定したボタン（次に押す1つを大きく・もう1つを小さく上に） */
-#dock{position:fixed;left:0;right:0;z-index:9;padding:16px 0 10px;background:linear-gradient(rgba(247,246,242,0),var(--bg) 16px)}
+/* 🔴 下の帯（66px＋上の線1px＋ホームバーの分）のすぐ上。帯と同じ式で置く＝測らない。
+   起動の瞬間に帯の高さを測って置いていたら、ホーム画面から開いた直後の iPhone はホームバーの分が
+   遅れて入るため、ボタンが半分隠れた（2026-10-05 実機）。式なら余白が入ったとき帯と一緒に動く */
+#dock{position:fixed;left:0;right:0;bottom:calc(67px + env(safe-area-inset-bottom));z-index:9;padding:16px 0 10px;background:linear-gradient(rgba(247,246,242,0),var(--bg) 16px)}
 #dock .dockin{max-width:520px;margin:0 auto}
 .dbig{display:block;width:calc(100% - 36px);margin:0 18px;padding:20px 0 16px;border-radius:20px;text-align:center;font-size:24px;font-weight:bold;color:#fff}
 .dbig small{display:block;font-size:13px;font-weight:normal;opacity:.9;margin-top:4px}
@@ -165,7 +168,8 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 #tabs{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;background:#FBFAF7;border-top:1px solid var(--line);
       padding-bottom:env(safe-area-inset-bottom);z-index:10}
 #tabs .in{display:flex;width:100%;max-width:520px}
-#tabs button{flex:1;padding:8px 0 10px;font-size:12px;color:var(--muted)}
+/* 🔴 帯の高さは 66px に固定（下の固定ボタン #dock が同じ数字で上に乗る＝TABS_H と揃える） */
+#tabs button{flex:1;height:66px;box-sizing:border-box;padding:8px 0 10px;font-size:12px;color:var(--muted)}
 #tabs button b{display:block;font-size:20px}
 #tabs button.on{color:var(--acc);font-weight:bold}
 </style>
@@ -522,11 +526,10 @@ function dockHtml(st, acts) {
   if (acts.indexOf(main) >= 0) h += '<button class="dbig ' + big[main][0] + '" data-act="' + main + '"' + dis + ">" + big[main][1] + when + "</button>";
   return h + "</div></div>";
 }
-// 固定したボタンを下の切り替えの帯のすぐ上に置き、同じ高さの空きを中身の最後に作る
+// 固定したボタンと同じ高さの空きを中身の最後に作る（ボタンの位置そのものは CSS の #dock が帯と同じ式で決める）
 function placeDock() {
   var d = el("dock"), sp = el("dockSpace");
   if (!d || !sp) return;
-  d.style.bottom = el("tabs").offsetHeight + "px";
   sp.style.height = d.offsetHeight + "px";
 }
 // U 退勤した後の今日の結果（作業時間を大きく）
