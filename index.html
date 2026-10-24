@@ -336,7 +336,15 @@ function monthSummary(days, ym, prefs) {
   return { days: n, total: total, over: over, avg: n ? Math.round(total / n) : null };
 }
 
-// 直す画面の中身を確かめる。f = {kind, start, end, brk}（brk は "1:00" か ""＝自動）
+// 休憩欄の文字を分に。「1:00」でも「60」（分だけ）でもよい。
+// 🔴 iPhone の数字キーボード（inputmode=numeric）にはコロンが無い＝「1:00」は打てない。分だけの形も受ける。
+function brkMinOf(s) {
+  var t = String(s == null ? "" : s).trim();
+  if (/^\d{1,3}$/.test(t)) return +t;
+  return hm2min(t);
+}
+
+// 直す画面の中身を確かめる。f = {kind, start, end, brk}（brk は "1:00"・"60" か ""＝自動）
 function validateEdit(f) {
   if (f.kind === "off") return { ok: true };
   var s = hm2min(f.start);
@@ -348,8 +356,8 @@ function validateEdit(f) {
     if (e <= s) return { ok: false, why: "退勤が出勤より前（または同じ）です。0時を過ぎる勤務は扱えません。" };
   }
   if (f.brk) {
-    var b = hm2min(f.brk);
-    if (b == null) return { ok: false, why: "休憩は「1:00」の形で入れてください。" };
+    var b = brkMinOf(f.brk);
+    if (b == null) return { ok: false, why: "休憩は「60」（分）か「1:00」の形で入れてください。" };
     if (e != null && b >= e - s) return { ok: false, why: "休憩が出勤〜退勤の長さ以上になっています。" };
   }
   return { ok: true };
@@ -362,7 +370,7 @@ function applyEdit(day, f, brkInit, nowIso) {
   if (f.kind === "off") d = { kind: "off", memo: f.memo || "" };
   else {
     d = { kind: "work", start: f.start, end: f.end || null, breaks: clone(old.kind === "work" ? old.breaks || [] : []), memo: f.memo || "" };
-    if (f.brk && f.brk !== brkInit) d.brkMin = hm2min(f.brk);
+    if (f.brk && f.brk !== brkInit) d.brkMin = brkMinOf(f.brk);
     else if (f.brk && typeof old.brkMin === "number") d.brkMin = old.brkMin;
   }
   var log = describeEdit(old, d);
@@ -438,7 +446,7 @@ var UNDO_MS = 5000;
 var LOCK_MS = 1000;   // 押した直後に次のボタンを押せない時間（出勤と同じ場所に退勤が出るため）
 
 var S = { days: {}, prefs: defaultPrefs() };
-var V = { tab: "today", month: "", undo: null, edit: null, saveErr: "", lockUntil: 0 };
+var V = { tab: "today", month: "", undo: null, edit: null, saveErr: "", loadErr: "", lockUntil: 0 };
 var setMsg = { backup: "" };
 
 function el(id) { return document.getElementById(id); }
@@ -457,9 +465,17 @@ function loadAll() {
     if (rp) { var p = JSON.parse(rp) || {}, base = defaultPrefs(); Object.keys(base).forEach(function (k) { if (p[k] != null) base[k] = p[k]; }); S.prefs = base; }
   } catch (e) {
     // 🔴 読めない保存を空で上書きしない＝退避してから空で始める
-    try { localStorage.setItem(KEYS.broken, JSON.stringify({ at: nowIso(), days: rd, prefs: rp })); } catch (e2) { /* 退避もできない */ }
+    // ⚠ 前の退避があれば上書きしない（2回目の破損で1回目の中身が消える）＝日時つきの別名に置く
+    var stashed = false;
+    try {
+      var bk = localStorage.getItem(KEYS.broken) ? KEYS.broken + "_" + Date.now() : KEYS.broken;
+      localStorage.setItem(bk, JSON.stringify({ at: nowIso(), days: rd, prefs: rp }));
+      stashed = true;
+    } catch (e2) { /* 退避もできない */ }
     S.days = {}; S.prefs = defaultPrefs();
-    V.saveErr = "⚠️ 保存されていた記録が読めませんでした（中身は別の場所に残してあります）。";
+    // 🔴 saveErr に入れると、直後の saveAll の成功で消える＝一度も画面に出なかった。別の欄に置く
+    V.loadErr = stashed ? "⚠️ 保存されていた記録が読めませんでした（中身は別の場所に残してあります）。"
+                        : "⚠️ 保存されていた記録が読めませんでした（この iPhone では保存の場所が使えません）。";
   }
   if (!S.prefs.since) { S.prefs.since = sinceOf(S.days, "", today()); saveAll(); }
 }
@@ -488,6 +504,7 @@ function renderToday() {
   var t = today(), day = S.days[t], st = stateOf(day), acts = allowedActions(day);
   var now = new Date();
   var h = "";
+  if (V.loadErr) h += '<div class="smsg ng">' + esc(V.loadErr) + "</div>";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
   h += alertBox();
   // 退勤した後は時計を小さく＝今日の作業時間（大きい数字）を主役にする（見本 v5）
@@ -622,6 +639,7 @@ function renderMonth() {
   var p = ym.split("-");
   el("goMonth").classList.toggle("hide", ym === monthOf(t));   // 今月を見ているときは出さない（📱タスクと同じ）
   var h = "";
+  if (V.loadErr) h += '<div class="smsg ng">' + esc(V.loadErr) + "</div>";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
   h += '<div class="mon"><button data-mon="-1">◀</button><div class="mt"><b>' + (+p[0]) + "年" + (+p[1]) + "月</b><small>" + (+p[1]) + "/1〜" + (+p[1]) + "/" + daysInMonth(ym) + '</small></div><button data-mon="1">▶</button></div>';
   // 合計と日ごとの行はめくりの中（指についてくる）。見出し（年月・◀▶）は動かさず、めくり終わってから変わる＝📱タスクのカレンダーと同じ
@@ -813,7 +831,7 @@ function renderEditor() {
     h += '<button class="btn sec2" data-ed="usual">⏱ いつもの時間で埋める（' + esc(S.prefs.start) + "–" + esc(S.prefs.end) + "・休憩" + dur(S.prefs.brk) + "）</button>";
     h += '<div class="kv"><span>出勤</span><input type="time" id="edStart" value="' + esc(e.start) + '"></div>';
     h += '<div class="kv"><span>退勤</span><input type="time" id="edEnd" value="' + esc(e.end) + '"' + (e.end ? "" : ' style="border-color:var(--warn)"') + "></div>";
-    h += '<div class="kv"><span>休憩</span><input type="text" id="edBrk" inputmode="numeric" placeholder="自動" value="' + esc(e.brk) + '"></div>';
+    h += '<div class="kv"><span>休憩</span><input type="text" id="edBrk" inputmode="numeric" placeholder="自動（例 60）" value="' + esc(e.brk) + '"></div>';
     h += '<div class="note">休憩を空にすると自動＝押した休憩の合計、押していなければ 6時間を超えた日だけ「いつもの休憩（' + dur(S.prefs.brk) + "）」を引きます。</div>";
   }
   h += '<div class="kv"><span>メモ</span><input type="text" class="memo" id="edMemo" value="' + esc(e.memo) + '" placeholder="例：仕入れ"></div>';
@@ -845,7 +863,11 @@ function onEditorClick(ev) {
   else if (a === "usual") { e.start = S.prefs.start; e.end = S.prefs.end; e.brk = dur(S.prefs.brk); e.err = ""; }
   else if (a === "del") {
     if (!e.armedDel) { e.armedDel = true; renderEditor(); return; }
-    delete S.days[e.date]; saveAll(); closeEditor(); return;
+    var gone = S.days[e.date];
+    delete S.days[e.date];
+    if (!saveAll()) { if (gone) S.days[e.date] = gone; e.err = V.saveErr; renderEditor(); return; }
+    if (V.undo && V.undo.date === e.date) V.undo = null;
+    closeEditor(); return;
   } else if (a === "save") {
     var f = { kind: e.kind, start: e.start, end: e.end, brk: e.brk, memo: e.memo.trim() };
     var chk = validateEdit(f);
@@ -854,6 +876,8 @@ function onEditorClick(ev) {
     var r = applyEdit(before, f, e.brkInit, nowIso());
     S.days[e.date] = r.day;
     if (!saveAll()) { if (before) S.days[e.date] = before; else delete S.days[e.date]; e.err = V.saveErr; renderEditor(); return; }
+    // 🔴 押した直後（5秒）の「取り消す」は押す前の1日を丸ごと戻す＝残すと直した内容が消える
+    if (V.undo && V.undo.date === e.date) V.undo = null;
     closeEditor(); return;
   }
   renderEditor();
@@ -862,6 +886,7 @@ function onEditorClick(ev) {
 // ── 設定 ──
 function renderSettings() {
   var p = S.prefs, h = "";
+  if (V.loadErr) h += '<div class="smsg ng">' + esc(V.loadErr) + "</div>";
   if (V.saveErr) h += '<div class="smsg ng">' + esc(V.saveErr) + "</div>";
   h += '<div class="sbox"><h3>いつもの勤務時間</h3>'
     + '<div class="kv"><span>開始</span><input type="time" data-pref="start" value="' + esc(p.start) + '"></div>'
