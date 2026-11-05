@@ -15,7 +15,7 @@
 */
 
 var PREFIX = "shukkin-";
-var CACHE = PREFIX + "v8";
+var CACHE = PREFIX + "v9";
 
 // 控える物の一覧。"./" は入口（ホーム画面のアイコンが開くアドレス）＝中身は index.html
 var FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png"];

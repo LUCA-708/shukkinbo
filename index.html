@@ -226,11 +226,16 @@ function defaultPrefs() {
 }
 
 // 押して記録した休憩の合計（終わっていない休憩は endMin まで）
-function breakSum(day, endMin) {
+// 🔴 2026-11-06：休憩は「出勤〜退勤」の中だけ数える（startMin〜endMin で切り詰める）。
+//    直す画面で出勤・退勤を変えたとき、範囲の外に残った休憩まで引いて作業時間が少なく出ていた
+function breakSum(day, endMin, startMin) {
   var t = 0;
   (day.breaks || []).forEach(function (b) {
     var s = hm2min(b.s), e = b.e ? hm2min(b.e) : endMin;
-    if (s != null && e != null && e > s) t += e - s;
+    if (s == null || e == null) return;
+    if (startMin != null && s < startMin) s = startMin;
+    if (endMin != null && e > endMin) e = endMin;
+    if (e > s) t += e - s;
   });
   return t;
 }
@@ -248,7 +253,7 @@ function dayWork(day, prefs, nowMin) {
   if (endMin < s) endMin = s;
   var span = endMin - s, brk, kind;
   if (typeof day.brkMin === "number") { brk = day.brkMin; kind = "manual"; }
-  else if ((day.breaks || []).length) { brk = breakSum(day, endMin); kind = "punched"; }
+  else if ((day.breaks || []).length) { brk = breakSum(day, endMin, s); kind = "punched"; }
   else if (!open && span > AUTO_BREAK_OVER) { brk = prefs.brk || 0; kind = "auto"; }
   else { brk = 0; kind = "none"; }
   if (brk > span) brk = span;
@@ -353,12 +358,13 @@ function validateEdit(f) {
   if (f.end) {
     e = hm2min(f.end);
     if (e == null) return { ok: false, why: "退勤の時刻が読めません。" };
-    if (e <= s) return { ok: false, why: "退勤が出勤より前（または同じ）です。0時を過ぎる勤務は扱えません。" };
+    // 🔴 2026-11-06：同じ分は通す（押し間違いで出勤と退勤が同じ分になった日を、メモだけでも直せるように）
+    if (e < s) return { ok: false, why: "退勤が出勤より前です。0時を過ぎる勤務は扱えません。" };
   }
   if (f.brk) {
     var b = brkMinOf(f.brk);
     if (b == null) return { ok: false, why: "休憩は「60」（分）か「1:00」の形で入れてください。" };
-    if (e != null && b >= e - s) return { ok: false, why: "休憩が出勤〜退勤の長さ以上になっています。" };
+    if (e != null && (e > s ? b >= e - s : b > 0)) return { ok: false, why: "休憩が出勤〜退勤の長さ以上になっています。" };
   }
   return { ok: true };
 }
@@ -410,9 +416,28 @@ function checkImport(o) {
     if (v.kind === "work" && v.start && hm2min(v.start) == null) return { ok: false, why: k + " の出勤の時刻が壊れています" };
     if (v.kind === "work" && v.end && hm2min(v.end) == null) return { ok: false, why: k + " の退勤の時刻が壊れています" };
   }
-  var p = defaultPrefs(), src = o.prefs && typeof o.prefs === "object" ? o.prefs : {};
-  Object.keys(p).forEach(function (key) { if (src[key] != null) p[key] = src[key]; });
-  return { ok: true, data: { days: o.days, prefs: p, exportedAt: o.exportedAt, count: keys.length } };
+  var cp = cleanPrefs(o.prefs);
+  return { ok: true, data: { days: o.days, prefs: cp.prefs, fixed: cp.fixed, exportedAt: o.exportedAt, count: keys.length } };
+}
+// 設定の中身を型で確かめて混ぜる（取り込み・起動時の読み込みの両方で使う）。
+// 🔴 2026-11-06：前は型を見ずに混ぜていた＝壊れた控え（workdays が文字など）で画面が落ちる・計算がずれる。
+//    合わない項目は既定値に戻し、どれを戻したかを fixed に返す（黙って直さない）
+var PREF_LABEL = { start: "開始", end: "終わり", brk: "いつもの休憩", workdays: "勤務日", limit: "1日の目安", since: "使い始めた日", lastBackup: "最後に保存した日" };
+function prefOk(key, v) {
+  if (key === "start" || key === "end") return typeof v === "string" && hm2min(v) != null;
+  if (key === "brk" || key === "limit") return typeof v === "number" && isFinite(v) && v >= 0;
+  if (key === "workdays") return Array.isArray(v) && v.every(function (d) { return d === Math.floor(d) && d >= 0 && d <= 6; });
+  return typeof v === "string";   // since・lastBackup
+}
+function cleanPrefs(src) {
+  var p = defaultPrefs(), fixed = [];
+  src = src && typeof src === "object" && !Array.isArray(src) ? src : {};
+  Object.keys(p).forEach(function (key) {
+    if (src[key] == null) return;
+    if (prefOk(key, src[key])) p[key] = src[key];
+    else fixed.push(PREF_LABEL[key] || key);
+  });
+  return { prefs: p, fixed: fixed };
 }
 // 使い始めた日：設定の日と記録の一番古い日の早い方（控えを読み込んだときに過去の記録も知らせの対象にする）
 function sinceOf(days, since, today) {
@@ -457,12 +482,19 @@ function nowIso() { return new Date().toISOString(); }
 function dlabel(s) { var d = toDate(s); return (d.getMonth() + 1) + "/" + d.getDate(); }
 
 function loadAll() {
-  var rd = null, rp = null;
+  var rd = null, rp = null, fixedPrefs = false;
   try {
     rd = localStorage.getItem(KEYS.days);
     rp = localStorage.getItem(KEYS.prefs);
     if (rd) S.days = JSON.parse(rd) || {};
-    if (rp) { var p = JSON.parse(rp) || {}, base = defaultPrefs(); Object.keys(base).forEach(function (k) { if (p[k] != null) base[k] = p[k]; }); S.prefs = base; }
+    if (rp) {
+      var cp = cleanPrefs(JSON.parse(rp));
+      S.prefs = cp.prefs;
+      if (cp.fixed.length) {
+        V.loadErr = "⚠️ 設定の一部（" + cp.fixed.join("・") + "）が読めなかったので、最初の値に戻しました。";
+        fixedPrefs = true;   // 戻した値を保存し直す（しないと起動のたびに同じ知らせが出る）
+      }
+    }
   } catch (e) {
     // 🔴 読めない保存を空で上書きしない＝退避してから空で始める
     // ⚠ 前の退避があれば上書きしない（2回目の破損で1回目の中身が消える）＝日時つきの別名に置く
@@ -478,6 +510,7 @@ function loadAll() {
                         : "⚠️ 保存されていた記録が読めませんでした（この iPhone では保存の場所が使えません）。";
   }
   if (!S.prefs.since) { S.prefs.since = sinceOf(S.days, "", today()); saveAll(); }
+  else if (fixedPrefs) saveAll();
 }
 function saveAll() {
   try {
@@ -606,6 +639,10 @@ function timeline(day, w) {
   (day.breaks || []).forEach(function (b) {
     var bs = hm2min(b.s), be = b.e ? hm2min(b.e) : e;
     if (bs == null || be == null) return;
+    // 計算（breakSum）と同じく「出勤〜退勤」の中だけ描く（範囲外の休憩で帯が伸びない）
+    if (bs < s) bs = s;
+    if (be > e) be = e;
+    if (be <= bs) return;
     pushWork(cur, bs); if (be > bs) segs.push(["var(--brk)", be - bs]); cur = Math.max(cur, be);
   });
   pushWork(cur, e);
@@ -901,8 +938,11 @@ function renderSettings() {
     + '<div class="note">記録はこの iPhone の中にだけあります。機種変更や故障に備えて、ときどき「ファイル」に保存してください。</div>'
     + '<div class="kv"><span>最後に保存した日</span><span>' + (p.lastBackup ? esc(p.lastBackup) : "まだ保存していません") + "</span></div>"
     + '<button class="btn pri" data-set="export">📤 控えファイルを保存する</button>'
-    + '<button class="btn sec2" data-set="import">📥 控えファイルから戻す</button></div>';
+    + '<button class="btn sec2" data-set="import">📥 控えファイルから戻す</button>'
+    + '<div class="note" id="offMsg">' + esc(offState) + "</div></div>";
   if (setMsg.backup) h += '<div class="smsg ' + (setMsg.backup.indexOf("⚠") === 0 ? "ng" : "ok") + '">' + esc(setMsg.backup) + "</div>";
+  // 🔴 2026-11-06：置き換えの赤いボタンはここで描く（前は後から足していた＝描き直すと消えて取り込めなくなった）
+  if (pendingImport) h += '<button class="btn armed" data-set="importGo" style="width:calc(100% - 28px);margin:0 14px">置き換える（' + pendingImport.count + "日分）</button>";
   h += '<div class="note" style="margin:16px">使い始めた日：' + esc(p.since) + "（この日より前の空欄は知らせません）</div>";
   el("view").innerHTML = h;
 }
@@ -910,7 +950,8 @@ function onPrefChange(ev) {
   var t = ev.target, k = t.getAttribute("data-pref");
   if (!k) return;
   var v = t.value;
-  if (k === "start" || k === "end") { if (hm2min(v) == null) return; S.prefs[k] = v; }
+  // 🔴 2026-11-06：空・読めない時刻は保存せず、描き直して保存してある値に戻す（前は欄だけ空のまま残った）
+  if (k === "start" || k === "end") { if (hm2min(v) == null) { renderSettings(); return; } S.prefs[k] = v; }
   else S.prefs[k] = +v;
   saveAll(); renderSettings();
 }
@@ -925,6 +966,7 @@ function backupText() { return JSON.stringify(exportData(S.days, S.prefs, new Da
 function backupName() { var d = new Date(); return "shukkinbo_" + ymd(d).replace(/-/g, "") + "_" + pad2(d.getHours()) + pad2(d.getMinutes()) + ".json"; }
 function markBackedUp(text) { S.prefs.lastBackup = today(); setMsg.backup = text; saveAll(); if (V.tab === "set") renderSettings(); }
 function saveBackupFile() {
+  pendingImport = null;   // 書き出しを始めたら取り込み待ちはやめる（赤いボタンだけ残らないように）
   var text = backupText(), name = backupName(), n = Object.keys(S.days).length;
   var file = null;
   try { file = new File([text], name, { type: "application/json" }); } catch (e) { file = null; }
@@ -958,12 +1000,10 @@ function onImportFile(e) {
     pendingImport = chk.data;
     var when = isNaN(new Date(chk.data.exportedAt).getTime()) ? "日付不明" : ymd(new Date(chk.data.exportedAt));
     // 🔴 置き換える前に件数を見せて、もう一度押させる
-    setMsg.backup = "⚠️ 今の " + Object.keys(S.days).length + "日分を、控えの " + chk.data.count + "日分（" + when + " の控え）で置き換えます。よければ下の赤いボタンを押してください。";
+    setMsg.backup = "⚠️ 今の " + Object.keys(S.days).length + "日分を、控えの " + chk.data.count + "日分（" + when + " の控え）で置き換えます。"
+      + (chk.data.fixed.length ? "控えの設定のうち「" + chk.data.fixed.join("・") + "」は読めないので最初の値にします。" : "")
+      + "よければ下の赤いボタンを押してください。";
     renderSettings();
-    var b = document.createElement("button");
-    b.className = "btn armed"; b.style.width = "calc(100% - 28px)"; b.style.margin = "0 14px";
-    b.setAttribute("data-set", "importGo"); b.textContent = "置き換える（" + chk.data.count + "日分）";
-    el("view").appendChild(b);
   };
   rd.readAsText(f);
 }
@@ -1037,7 +1077,32 @@ function start() {
   window.addEventListener("resize", function () { if (V.tab === "month") fitToBottom(el("view")); if (V.tab === "today") placeDock(); });
   setInterval(tick, 15000);
   render();
-  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js").catch(function () { /* 控えが作れなくても画面は使える */ });
+  setupOffline();
+}
+
+// ── 電波なしで開けるか（📱タスク・🧮計算機と同じ仕組み・2026-11-06）──────────────
+// 🔴 「開けます」は控え係（sw.js）が全部そろえた印（__offline_ok）を実際に見つけたときだけ出す
+var offState = "";
+function paintOffline() { if (el("offMsg")) el("offMsg").textContent = offState; }
+function setupOffline() {
+  if (location.protocol !== "http:" && location.protocol !== "https:") { offState = "（電波なしで開けるかは、ネット上のアドレスから開くと出ます）"; paintOffline(); return; }
+  if (!("serviceWorker" in navigator) || !window.caches) { offState = "⚠️ このブラウザでは控えを作れません（電波が要ります）"; paintOffline(); return; }
+  var tries = 0;
+  function look() {
+    tries++;
+    caches.match("./__offline_ok").then(function (hit) {
+      if (hit) return hit.json().then(function (info) {
+        var d = String(info && info.cachedOn ? info.cachedOn : "").replace(/-/g, "/").slice(5);
+        offState = "✅ 電波が無くても開けます" + (d ? "（" + d + " 取り込み）" : ""); paintOffline();
+      });
+      if (tries < 12) { setTimeout(look, 900); return; }
+      offState = "⚠️ 控えがまだできていません。電波のある所でもう一度開いてください"; paintOffline();
+    }).catch(function () { offState = "⚠️ 控えの状態を確かめられませんでした"; paintOffline(); });
+  }
+  offState = "⏳ 電波が無くても開けるように準備しています…"; paintOffline();
+  navigator.serviceWorker.register("./sw.js").then(look).catch(function (err) {
+    offState = "⚠️ 控えが作れませんでした（" + (err && err.message ? err.message : "理由不明") + "）"; paintOffline();
+  });
 }
 start();
 </script>
